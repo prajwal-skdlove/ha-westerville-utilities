@@ -92,8 +92,23 @@ class WestervilleData:
     last_updated: datetime = field(default_factory=dt_util.utcnow)
 
 
+def _sanitize_id_part(value: str) -> str:
+    """Make a value safe for use inside a statistic_id.
+
+    Statistic ids only allow lowercase letters, digits, and underscores
+    (see homeassistant.core.VALID_STATISTIC_ID) -- account ids like
+    "104758-036682" contain a dash and would otherwise produce an invalid
+    id and fail to import.
+    """
+    return value.lower().replace("-", "_").strip("_")
+
+
 def _statistic_id(meter: Meter) -> str:
-    return f"{DOMAIN}:{meter.utility_type.value}_{meter.meter_id}".lower()
+    return f"{DOMAIN}:{meter.utility_type.value}_{_sanitize_id_part(meter.meter_id)}"
+
+
+def _bill_statistic_id(account: Account) -> str:
+    return f"{DOMAIN}:{_sanitize_id_part(account.account_id)}_bill_amount"
 
 
 class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
@@ -148,6 +163,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
                 bills = []
             if bills:
                 bills_by_account[account.account_id] = max(bills, key=lambda b: b.period_end)
+                await self._async_update_bill_statistics(account, bills)
 
             try:
                 meters = await list_meters(self._client, account)
@@ -233,3 +249,53 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         async_add_external_statistics(self.hass, metadata, stats)
 
         return MeterData(meter=meter, latest_value=running_sum)
+
+    async def _async_update_bill_statistics(self, account: Account, bills: list[Bill]) -> None:
+        """Import bill amounts as a cumulative HA statistic, month over month.
+
+        Mirrors _async_update_meter_statistics's running-sum approach so
+        bill cost is graphable in HA's history/statistics views the same
+        way meter usage is -- one point per billing period, sum
+        monotonically increasing (total billed to date). Unitless, matching
+        how the built-in Opower integration models its own cost statistics
+        (currency isn't a convertible "unit class" in HA's unit system the
+        way energy/volume are).
+        """
+        statistic_id = _bill_statistic_id(account)
+        recorder = get_instance(self.hass)
+
+        last_stat = await recorder.async_add_executor_job(
+            get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
+        )
+        prior_sum = 0.0
+        last_start: float | None = None
+        if last_stat:
+            row = last_stat[statistic_id][0]
+            prior_sum = float(row.get("sum") or 0.0)
+            last_start = row["start"]
+
+        new_bills = sorted(bills, key=lambda b: b.period_start)
+        if last_start is not None:
+            new_bills = [b for b in new_bills if b.period_start.timestamp() > last_start]
+
+        if not new_bills:
+            _LOGGER.debug("Account %s: no new bills this cycle", account.account_id)
+            return
+
+        running_sum = prior_sum
+        stats: list[StatisticData] = []
+        for bill in new_bills:
+            running_sum += bill.amount_total
+            stats.append(StatisticData(start=bill.period_start, state=bill.amount_total, sum=running_sum))
+
+        metadata = StatisticMetaData(
+            mean_type=StatisticMeanType.NONE,
+            has_sum=True,
+            name=f"Westerville bill amount ({account.account_id})",
+            source=DOMAIN,
+            statistic_id=statistic_id,
+            unit_class=None,
+            unit_of_measurement=None,
+        )
+        _LOGGER.debug("Account %s: importing %d new bill statistic(s)", account.account_id, len(stats))
+        async_add_external_statistics(self.hass, metadata, stats)
