@@ -128,4 +128,9 @@ async def test_unload_entry_removes_entities(recorder_mock, hass: HomeAssistant)
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.electric_900000001_usage") is None
+    # Unload marks the entity unavailable rather than removing its state
+    # outright (HA keeps it around, restorable, until the entity/entry is
+    # actually deleted) -- that's the real, correct behavior here.
+    state = hass.states.get("sensor.electric_900000001_usage")
+    assert state is not None
+    assert state.state == "unavailable"
