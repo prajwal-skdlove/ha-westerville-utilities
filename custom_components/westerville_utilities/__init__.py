@@ -16,8 +16,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: WestervilleConfigEntry) 
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
+    # Options (polling interval, backfill depth) are read once in the
+    # coordinator's __init__, so changing them needs a full reload to take
+    # effect -- this listener does that automatically whenever the options
+    # flow saves new values.
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: WestervilleConfigEntry) -> None:
+    """Reload the entry when its options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: WestervilleConfigEntry) -> bool:

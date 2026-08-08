@@ -227,18 +227,19 @@ async def fetch_daily(
     *,
     since: datetime | None,
     backfill: bool,
+    backfill_lookback_days: int = BACKFILL_DAILY_LOOKBACK_DAYS,
 ) -> list[Reading]:
     """Fetch daily AMI readings.
 
     If `backfill` is True, walks backward in MAX_DAILY_SPAN_DAYS-day windows
     from now until a run of empty windows confirms the meter's real
-    AMI-enabled history boundary, or BACKFILL_DAILY_LOOKBACK_DAYS is
-    reached -- whichever comes first. The hard cap matters because this
-    runs synchronously during Home Assistant's config entry setup (which
-    has its own timeout); it can't rely solely on the portal eventually
-    returning an empty window. Otherwise fetches a single bounded recent
-    window (`since`, or the last INCREMENTAL_DAILY_LOOKBACK_DAYS days), which
-    is normally just one request on an incremental poll.
+    AMI-enabled history boundary, or `backfill_lookback_days` is reached --
+    whichever comes first. The hard cap matters because this runs
+    synchronously during Home Assistant's config entry setup (which has its
+    own timeout); it can't rely solely on the portal eventually returning
+    an empty window. Otherwise fetches a single bounded recent window
+    (`since`, or the last INCREMENTAL_DAILY_LOOKBACK_DAYS days), which is
+    normally just one request on an incremental poll.
     """
     inquiry_type = inquiry_type_of(meter)
     end = datetime.now(UTC)
@@ -249,7 +250,7 @@ async def fetch_daily(
         return readings or []
 
     span = timedelta(days=MAX_DAILY_SPAN_DAYS)
-    earliest = end - timedelta(days=BACKFILL_DAILY_LOOKBACK_DAYS)
+    earliest = end - timedelta(days=backfill_lookback_days)
     readings: list[Reading] = []
     consecutive_empty = 0
     cursor_end = end
@@ -314,19 +315,20 @@ async def fetch_hourly(
     *,
     since: datetime | None,
     backfill: bool,
+    backfill_lookback_days: int = BACKFILL_HOURLY_LOOKBACK_DAYS,
 ) -> list[Reading]:
     """Fetch hourly AMI readings, walking backward day by day.
 
     Hourly AMI history is short-lived (roughly 2 weeks), so
     MAX_CONSECUTIVE_EMPTY_WINDOWS is expected to stop the walk well before
-    BACKFILL_HOURLY_LOOKBACK_DAYS is reached -- but the hard cap is what
+    `backfill_lookback_days` is reached -- but the hard cap is what
     actually guarantees a bounded first-refresh time if that heuristic
-    doesn't trigger as expected (see BACKFILL_HOURLY_LOOKBACK_DAYS).
+    doesn't trigger as expected.
     """
     inquiry_type = inquiry_type_of(meter)
     end_date = datetime.now(UTC).date()
     if backfill:
-        start_date = end_date - timedelta(days=BACKFILL_HOURLY_LOOKBACK_DAYS)
+        start_date = end_date - timedelta(days=backfill_lookback_days)
     else:
         start_date = (since or datetime.now(UTC) - timedelta(days=INCREMENTAL_HOURLY_LOOKBACK_DAYS)).date()
 

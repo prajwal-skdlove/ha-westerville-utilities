@@ -27,6 +27,24 @@
       "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Westerville Utilities options",
+        "description": "Changing these reloads the integration and applies immediately.",
+        "data": {
+          "update_interval_hours": "Polling interval (hours)",
+          "backfill_daily_days": "Daily usage history depth (days)",
+          "backfill_hourly_days": "Hourly usage history depth (days)"
+        },
+        "data_description": {
+          "update_interval_hours": "How often to sync with the portal. Westerville's own data lags 1-2 days behind real time, so shorter intervals just re-request the same numbers.",
+          "backfill_daily_days": "How far back to import daily usage on first sync. The portal typically retains ~9 months of daily data; going further back just costs extra requests for no data.",
+          "backfill_hourly_days": "How far back to import hourly usage on first sync. The portal typically retains ~2 weeks of hourly data."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "meter_usage": {

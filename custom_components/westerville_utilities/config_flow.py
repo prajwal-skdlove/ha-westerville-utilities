@@ -8,12 +8,22 @@ from typing import Any
 import httpx
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import callback
 from homeassistant.helpers.httpx_client import create_async_httpx_client
+from homeassistant.helpers.selector import NumberSelector, NumberSelectorConfig, NumberSelectorMode
 
 from .client import CannotConnect, InvalidAuth, authenticate
-from .const import DOMAIN
+from .const import (
+    CONF_BACKFILL_DAILY_DAYS,
+    CONF_BACKFILL_HOURLY_DAYS,
+    CONF_UPDATE_INTERVAL_HOURS,
+    DEFAULT_BACKFILL_DAILY_DAYS,
+    DEFAULT_BACKFILL_HOURLY_DAYS,
+    DEFAULT_UPDATE_INTERVAL_HOURS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +39,12 @@ class WestervilleConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Westerville Utilities."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> WestervilleOptionsFlow:
+        """Get the options flow for this handler."""
+        return WestervilleOptionsFlow()
 
     async def _validate(self, username: str, password: str) -> None:
         """Validate credentials against the real portal. Raises on failure."""
@@ -97,3 +113,36 @@ class WestervilleConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={"username": reauth_entry.data[CONF_USERNAME]},
         )
+
+
+class WestervilleOptionsFlow(OptionsFlow):
+    """Options for polling interval and backfill depth.
+
+    `self.config_entry` is provided automatically by the base class -- no
+    __init__ override needed (and none should be added; explicitly storing
+    it is deprecated in current Home Assistant).
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_UPDATE_INTERVAL_HOURS,
+                    default=current.get(CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS),
+                ): NumberSelector(NumberSelectorConfig(min=1, max=168, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Optional(
+                    CONF_BACKFILL_DAILY_DAYS,
+                    default=current.get(CONF_BACKFILL_DAILY_DAYS, DEFAULT_BACKFILL_DAILY_DAYS),
+                ): NumberSelector(NumberSelectorConfig(min=30, max=3650, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Optional(
+                    CONF_BACKFILL_HOURLY_DAYS,
+                    default=current.get(CONF_BACKFILL_HOURLY_DAYS, DEFAULT_BACKFILL_HOURLY_DAYS),
+                ): NumberSelector(NumberSelectorConfig(min=1, max=365, step=1, mode=NumberSelectorMode.BOX)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
