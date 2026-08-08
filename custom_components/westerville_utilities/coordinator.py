@@ -49,15 +49,19 @@ from .client.bills import fetch_bills
 from .client.merge import merge_readings
 from .client.models import Granularity
 from .client.usage import fetch_daily, fetch_hourly, fetch_monthly
-from .const import DOMAIN
+from .const import (
+    CONF_BACKFILL_DAILY_DAYS,
+    CONF_BACKFILL_HOURLY_DAYS,
+    CONF_UPDATE_INTERVAL_HOURS,
+    DEFAULT_BACKFILL_DAILY_DAYS,
+    DEFAULT_BACKFILL_HOURLY_DAYS,
+    DEFAULT_UPDATE_INTERVAL_HOURS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 type WestervilleConfigEntry = ConfigEntry[WestervilleCoordinator]
-
-# Westerville's own data lags a day or two behind "now"; polling more often
-# than this just re-requests data that hasn't changed yet.
-UPDATE_INTERVAL = timedelta(hours=24)
 
 # Overlap applied on top of the last imported statistic's start time when
 # doing an incremental (non-backfill) fetch, to catch late corrections the
@@ -117,15 +121,19 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
     config_entry: WestervilleConfigEntry
 
     def __init__(self, hass: HomeAssistant, config_entry: WestervilleConfigEntry) -> None:
+        options = config_entry.options
+        update_interval_hours = options.get(CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS)
         super().__init__(
             hass,
             _LOGGER,
             config_entry=config_entry,
             name=DOMAIN,
-            update_interval=UPDATE_INTERVAL,
+            update_interval=timedelta(hours=update_interval_hours),
         )
         self._username: str = config_entry.data[CONF_USERNAME]
         self._password: str = config_entry.data[CONF_PASSWORD]
+        self._backfill_daily_days = options.get(CONF_BACKFILL_DAILY_DAYS, DEFAULT_BACKFILL_DAILY_DAYS)
+        self._backfill_hourly_days = options.get(CONF_BACKFILL_HOURLY_DAYS, DEFAULT_BACKFILL_HOURLY_DAYS)
         # A dedicated client (not the shared HA-wide one) so this entry's
         # login-session cookies never mix with another entry's -- mirrors
         # Opower's async_create_clientsession(hass, cookie_jar=...) pattern.
@@ -218,9 +226,15 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
 
         readings = list(await fetch_monthly(self._client, meter))
         if Granularity.DAILY in granularities:
-            readings += await fetch_daily(self._client, meter, since=since, backfill=backfill)
+            readings += await fetch_daily(
+                self._client, meter, since=since, backfill=backfill,
+                backfill_lookback_days=self._backfill_daily_days,
+            )
         if Granularity.HOURLY in granularities:
-            readings += await fetch_hourly(self._client, meter, since=since, backfill=backfill)
+            readings += await fetch_hourly(
+                self._client, meter, since=since, backfill=backfill,
+                backfill_lookback_days=self._backfill_hourly_days,
+            )
 
         merged = merge_readings(readings)
         if last_start is not None:
