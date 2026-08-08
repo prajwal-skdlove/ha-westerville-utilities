@@ -52,10 +52,19 @@ MAX_CONSECUTIVE_EMPTY_WINDOWS = 5
 INCREMENTAL_DAILY_LOOKBACK_DAYS = 10
 INCREMENTAL_HOURLY_LOOKBACK_DAYS = 5
 
-# Generous upper bound for a backfill's hourly walk. Hourly AMI history is
-# short-lived (roughly 2 weeks) so MAX_CONSECUTIVE_EMPTY_WINDOWS stops the
-# walk long before this is reached in practice.
-BACKFILL_HOURLY_LOOKBACK_DAYS = 365
+# Hard caps on how far a *backfill* walk can go, independent of
+# MAX_CONSECUTIVE_EMPTY_WINDOWS. The empty-window heuristic alone isn't
+# enough here: Home Assistant runs the first backfill synchronously inside
+# config entry setup, which has its own ~10 minute timeout. If the
+# heuristic doesn't trigger quickly (sparse/gappy data further back than
+# expected), a purely reactive "walk until empty" turned into hundreds of
+# sequential requests across multiple meters in practice and got the whole
+# setup cancelled mid-request. These caps bound the worst case regardless
+# of what the heuristic does, mirroring how Home Assistant's own Opower
+# integration hard-caps backfill depth (3 years daily, 2 months hourly)
+# rather than relying on a portal signal to know when to stop.
+BACKFILL_DAILY_LOOKBACK_DAYS = 400  # >9 months of observed daily retention, with margin
+BACKFILL_HOURLY_LOOKBACK_DAYS = 30  # >2 weeks of observed hourly retention, with margin
 
 
 def _consumption_column_indices(table) -> tuple[int | None, int | None, int | None, str]:
@@ -223,8 +232,11 @@ async def fetch_daily(
 
     If `backfill` is True, walks backward in MAX_DAILY_SPAN_DAYS-day windows
     from now until a run of empty windows confirms the meter's real
-    AMI-enabled history boundary -- that's the meter's real history start,
-    not an arbitrary cutoff. Otherwise fetches a single bounded recent
+    AMI-enabled history boundary, or BACKFILL_DAILY_LOOKBACK_DAYS is
+    reached -- whichever comes first. The hard cap matters because this
+    runs synchronously during Home Assistant's config entry setup (which
+    has its own timeout); it can't rely solely on the portal eventually
+    returning an empty window. Otherwise fetches a single bounded recent
     window (`since`, or the last INCREMENTAL_DAILY_LOOKBACK_DAYS days), which
     is normally just one request on an incremental poll.
     """
@@ -237,11 +249,12 @@ async def fetch_daily(
         return readings or []
 
     span = timedelta(days=MAX_DAILY_SPAN_DAYS)
+    earliest = end - timedelta(days=BACKFILL_DAILY_LOOKBACK_DAYS)
     readings: list[Reading] = []
     consecutive_empty = 0
     cursor_end = end
-    while True:
-        cursor_start = cursor_end - span
+    while cursor_end > earliest:
+        cursor_start = max(earliest, cursor_end - span)
         window = await _fetch_daily_window(client, meter, inquiry_type, cursor_start.date(), cursor_end.date())
         if window is None:
             consecutive_empty += 1
@@ -255,10 +268,6 @@ async def fetch_daily(
             consecutive_empty = 0
             readings.extend(window)
         cursor_end = cursor_start
-        # Sanity stop -- don't walk back indefinitely even if the portal
-        # somehow never returns an empty window.
-        if cursor_end.year < 2000:
-            break
 
     _LOGGER.debug("Meter %s: parsed %d daily AMI reading(s) (backfill)", meter.meter_id, len(readings))
     return readings
@@ -308,9 +317,11 @@ async def fetch_hourly(
 ) -> list[Reading]:
     """Fetch hourly AMI readings, walking backward day by day.
 
-    Hourly AMI history is short-lived (roughly 2 weeks) so even a `backfill`
-    walk is bounded by MAX_CONSECUTIVE_EMPTY_WINDOWS in practice, not by
-    BACKFILL_HOURLY_LOOKBACK_DAYS.
+    Hourly AMI history is short-lived (roughly 2 weeks), so
+    MAX_CONSECUTIVE_EMPTY_WINDOWS is expected to stop the walk well before
+    BACKFILL_HOURLY_LOOKBACK_DAYS is reached -- but the hard cap is what
+    actually guarantees a bounded first-refresh time if that heuristic
+    doesn't trigger as expected (see BACKFILL_HOURLY_LOOKBACK_DAYS).
     """
     inquiry_type = inquiry_type_of(meter)
     end_date = datetime.now(UTC).date()
