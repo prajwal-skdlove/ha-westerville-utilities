@@ -115,7 +115,7 @@ def _entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @respx.mock
-async def test_first_refresh_imports_monthly_and_bill_statistics(hass: HomeAssistant, recorder_mock) -> None:
+async def test_first_refresh_imports_monthly_and_bill_statistics(recorder_mock, hass: HomeAssistant) -> None:
     _mock_happy_path()
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
@@ -141,7 +141,7 @@ async def test_first_refresh_imports_monthly_and_bill_statistics(hass: HomeAssis
 
 
 @respx.mock
-async def test_second_refresh_does_not_reimport_unchanged_data(hass: HomeAssistant, recorder_mock) -> None:
+async def test_second_refresh_does_not_reimport_unchanged_data(recorder_mock, hass: HomeAssistant) -> None:
     _mock_happy_path()
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
@@ -165,7 +165,7 @@ async def test_second_refresh_does_not_reimport_unchanged_data(hass: HomeAssista
     assert second_sum == first_sum == 10.0
 
 
-async def test_invalid_auth_raises_config_entry_auth_failed(hass: HomeAssistant, recorder_mock, monkeypatch) -> None:
+async def test_invalid_auth_raises_config_entry_auth_failed(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
 
@@ -178,7 +178,7 @@ async def test_invalid_auth_raises_config_entry_auth_failed(hass: HomeAssistant,
         await coordinator._async_update_data()
 
 
-async def test_cannot_connect_raises_update_failed(hass: HomeAssistant, recorder_mock, monkeypatch) -> None:
+async def test_cannot_connect_raises_update_failed(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
 
@@ -191,7 +191,7 @@ async def test_cannot_connect_raises_update_failed(hass: HomeAssistant, recorder
         await coordinator._async_update_data()
 
 
-async def test_no_accounts_raises_update_failed(hass: HomeAssistant, recorder_mock, monkeypatch) -> None:
+async def test_no_accounts_raises_update_failed(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
 
@@ -216,7 +216,7 @@ def test_statistic_id_sanitizes_dashes_in_account_id() -> None:
     assert _bill_statistic_id(account) == "westerville_utilities:104758_000001_bill_amount"
 
 
-async def test_options_configure_update_interval_and_backfill_depth(hass: HomeAssistant, recorder_mock) -> None:
+async def test_options_configure_update_interval_and_backfill_depth(recorder_mock, hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"username": "user@example.com", "password": "hunter2"},
@@ -234,7 +234,7 @@ async def test_options_configure_update_interval_and_backfill_depth(hass: HomeAs
     assert coordinator._backfill_hourly_days == 10
 
 
-async def test_options_default_when_unset(hass: HomeAssistant, recorder_mock) -> None:
+async def test_options_default_when_unset(recorder_mock, hass: HomeAssistant) -> None:
     entry = _entry(hass)
     coordinator = WestervilleCoordinator(hass, entry)
 

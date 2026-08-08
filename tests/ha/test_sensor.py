@@ -88,7 +88,7 @@ def _mock_happy_path() -> None:
 
 
 @respx.mock
-async def test_meter_and_bill_sensors_created_on_entry_setup(hass: HomeAssistant, recorder_mock) -> None:
+async def test_meter_and_bill_sensors_created_on_entry_setup(recorder_mock, hass: HomeAssistant) -> None:
     _mock_happy_path()
     entry = MockConfigEntry(
         domain=DOMAIN, data={"username": "user@example.com", "password": "hunter2"}
@@ -115,7 +115,7 @@ async def test_meter_and_bill_sensors_created_on_entry_setup(hass: HomeAssistant
 
 
 @respx.mock
-async def test_unload_entry_removes_entities(hass: HomeAssistant, recorder_mock) -> None:
+async def test_unload_entry_removes_entities(recorder_mock, hass: HomeAssistant) -> None:
     _mock_happy_path()
     entry = MockConfigEntry(
         domain=DOMAIN, data={"username": "user@example.com", "password": "hunter2"}
