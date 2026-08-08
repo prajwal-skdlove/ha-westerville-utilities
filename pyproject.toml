@@ -1,0 +1,37 @@
+[project]
+name = "ha-westerville-utilities"
+version = "0.1.0"
+description = "Home Assistant HACS integration for the Westerville, Ohio utility billing portal"
+readme = "README.md"
+requires-python = ">=3.14"
+# Mirrors custom_components/westerville_utilities/manifest.json's
+# "requirements" list -- keep these in sync.
+dependencies = [
+    "httpx>=0.28.1",
+    "beautifulsoup4>=4.12.0",
+    "tenacity>=9.0.0",
+]
+
+[dependency-groups]
+# Local default (`uv sync`): enough to run tests/client/ on Windows.
+# pytest-homeassistant-custom-component is deliberately NOT here -- merely
+# having it installed forces Home Assistant's own event loop policy and
+# socket-blocking for every test in the venv, not just ones that use it,
+# which conflicts with Windows' default asyncio event loop (see
+# tests/README.md). tests/ha/ needs the "ha-test" group below, which only
+# CI (Linux) installs.
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "respx>=0.21.0",
+]
+ha-test = [
+    "pytest-homeassistant-custom-component",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.uv]
+package = false

@@ -84,15 +84,26 @@ update, this is just an options change, not new Python being loaded).
   and multi-account logins are handled in code but less thoroughly
   exercised than the electric/water/single-account path.
 
+## Testing
+
+`tests/client/` (portal scraping/parsing, no Home Assistant dependency) runs
+anywhere, including Windows:
+
+```
+uv sync
+uv run pytest tests/client/ -v
+```
+
+`tests/ha/` (coordinator, config flow, sensors -- needs a real `hass`
+fixture) only runs on Linux; see [tests/README.md](tests/README.md) for why
+and how it's kept separate. CI (`.github/workflows/test.yml`) runs both on
+every push.
+
 ## Fast-follow (deliberately deferred from v1)
 
 - A real async-native HTTP retry/backoff tuned specifically for the
   Westerville portal's own rate limits, beyond the current fixed politeness
   delay + generic exponential backoff.
-- A formal automated test suite for the integration itself (the sibling
-  [`utility-reader`](https://github.com/prajwal-skdlove/utility-reader)
-  project, which this integration's client code was ported from, does have
-  one against recorded HTTP fixtures).
 - Broader multi-account/multi-meter real-world testing.
 
 ## Related project
