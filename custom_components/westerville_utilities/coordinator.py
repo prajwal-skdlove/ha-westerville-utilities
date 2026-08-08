@@ -101,7 +101,7 @@ def _sanitize_id_part(value: str) -> str:
 
     Statistic ids only allow lowercase letters, digits, and underscores
     (see homeassistant.core.VALID_STATISTIC_ID) -- account ids like
-    "104758-036682" contain a dash and would otherwise produce an invalid
+    "104758-000001" contain a dash and would otherwise produce an invalid
     id and fail to import.
     """
     return value.lower().replace("-", "_").strip("_")
