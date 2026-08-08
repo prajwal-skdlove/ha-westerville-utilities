@@ -270,10 +270,13 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         Mirrors _async_update_meter_statistics's running-sum approach so
         bill cost is graphable in HA's history/statistics views the same
         way meter usage is -- one point per billing period, sum
-        monotonically increasing (total billed to date). Unitless, matching
-        how the built-in Opower integration models its own cost statistics
-        (currency isn't a convertible "unit class" in HA's unit system the
-        way energy/volume are).
+        monotonically increasing (total billed to date). `unit_class` is
+        None because currency isn't a convertible "unit class" in HA's unit
+        system the way energy/volume are -- but `unit_of_measurement` is
+        still set to a real string (the account's configured currency),
+        since a chart card needs *some* unit to label its axis, and a
+        statistic with no unit at all may not show up as selectable there
+        even though the data exists.
         """
         statistic_id = _bill_statistic_id(account)
         recorder = get_instance(self.hass)
@@ -309,7 +312,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             source=DOMAIN,
             statistic_id=statistic_id,
             unit_class=None,
-            unit_of_measurement=None,
+            unit_of_measurement=self.hass.config.currency or "USD",
         )
         _LOGGER.debug("Account %s: importing %d new bill statistic(s)", account.account_id, len(stats))
         async_add_external_statistics(self.hass, metadata, stats)

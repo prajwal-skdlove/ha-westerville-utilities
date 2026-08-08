@@ -106,13 +106,13 @@ class WestervilleBillSensor(CoordinatorEntity[WestervilleCoordinator], SensorEnt
 
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "USD"
     _attr_translation_key = "latest_bill"
 
     def __init__(self, coordinator: WestervilleCoordinator, account_id: str) -> None:
         super().__init__(coordinator)
         self._account_id = account_id
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{account_id}_bill"
+        self._attr_native_unit_of_measurement = coordinator.hass.config.currency
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, account_id)},
             name=f"Westerville account {account_id}",
