@@ -1,0 +1,13 @@
+{
+  "domain": "westerville_utilities",
+  "name": "Westerville Utilities",
+  "codeowners": ["@prajwal-skdlove"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/prajwal-skdlove/ha-westerville-utilities",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/prajwal-skdlove/ha-westerville-utilities/issues",
+  "requirements": ["httpx>=0.28.1", "beautifulsoup4>=4.12.0", "tenacity>=9.0.0"],
+  "version": "0.1.0"
+}
