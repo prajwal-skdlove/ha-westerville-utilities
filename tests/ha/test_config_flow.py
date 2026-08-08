@@ -19,7 +19,7 @@ async def _start_user_flow(hass: HomeAssistant):
     )
 
 
-async def test_user_step_creates_entry_on_success(hass: HomeAssistant, monkeypatch) -> None:
+async def test_user_step_creates_entry_on_success(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _ok(*args, **kwargs):
         return None
 
@@ -38,7 +38,7 @@ async def test_user_step_creates_entry_on_success(hass: HomeAssistant, monkeypat
     assert result2["data"] == {"username": "user@example.com", "password": "hunter2"}
 
 
-async def test_user_step_shows_invalid_auth_error(hass: HomeAssistant, monkeypatch) -> None:
+async def test_user_step_shows_invalid_auth_error(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _bad_auth(*args, **kwargs):
         raise InvalidAuth("nope")
 
@@ -53,7 +53,7 @@ async def test_user_step_shows_invalid_auth_error(hass: HomeAssistant, monkeypat
     assert result2["errors"] == {"base": "invalid_auth"}
 
 
-async def test_user_step_shows_cannot_connect_error(hass: HomeAssistant, monkeypatch) -> None:
+async def test_user_step_shows_cannot_connect_error(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _unreachable(*args, **kwargs):
         raise CannotConnect("timeout")
 
@@ -68,7 +68,7 @@ async def test_user_step_shows_cannot_connect_error(hass: HomeAssistant, monkeyp
     assert result2["errors"] == {"base": "cannot_connect"}
 
 
-async def test_user_step_shows_unknown_error_on_unexpected_exception(hass: HomeAssistant, monkeypatch) -> None:
+async def test_user_step_shows_unknown_error_on_unexpected_exception(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _boom(*args, **kwargs):
         raise ValueError("something unrelated broke")
 
@@ -83,7 +83,7 @@ async def test_user_step_shows_unknown_error_on_unexpected_exception(hass: HomeA
     assert result2["errors"] == {"base": "unknown"}
 
 
-async def test_already_configured_aborts(hass: HomeAssistant, monkeypatch) -> None:
+async def test_already_configured_aborts(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _ok(*args, **kwargs):
         return None
 
@@ -103,7 +103,7 @@ async def test_already_configured_aborts(hass: HomeAssistant, monkeypatch) -> No
     assert result2["reason"] == "already_configured"
 
 
-async def test_reauth_flow_updates_password(hass: HomeAssistant, monkeypatch) -> None:
+async def test_reauth_flow_updates_password(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _ok(*args, **kwargs):
         return None
 
@@ -128,7 +128,7 @@ async def test_reauth_flow_updates_password(hass: HomeAssistant, monkeypatch) ->
     assert entry.data["username"] == "user@example.com"  # untouched
 
 
-async def test_reauth_flow_shows_invalid_auth_error(hass: HomeAssistant, monkeypatch) -> None:
+async def test_reauth_flow_shows_invalid_auth_error(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
     async def _bad_auth(*args, **kwargs):
         raise InvalidAuth("still wrong")
 
@@ -149,7 +149,7 @@ async def test_reauth_flow_shows_invalid_auth_error(hass: HomeAssistant, monkeyp
     assert entry.data["password"] == "old-password"  # not updated on failure
 
 
-async def test_options_flow_saves_values(hass: HomeAssistant) -> None:
+async def test_options_flow_saves_values(recorder_mock, hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, data={"username": "user@example.com", "password": "hunter2"}
     )
