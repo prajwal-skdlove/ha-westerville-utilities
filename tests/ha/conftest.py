@@ -26,6 +26,16 @@ pytest_plugins = "pytest_homeassistant_custom_component"
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Make custom_components/ discoverable by every test in this subpackage."""
+def auto_enable_custom_integrations(recorder_mock, enable_custom_integrations):
+    """Make custom_components/ discoverable, with recorder set up first.
+
+    manifest.json declares recorder as a hard dependency, so every test
+    here needs it regardless. Critically, recorder_mock is listed *before*
+    enable_custom_integrations (which depends on `hass` directly): this
+    fixture being autouse means it resolves before any explicitly-requested
+    fixture in a test, `hass` included, so if recorder_mock weren't listed
+    first here, `hass` would get created (via enable_custom_integrations)
+    before recorder is wired up, and pytest-homeassistant-custom-component
+    asserts against exactly that ordering.
+    """
     yield
