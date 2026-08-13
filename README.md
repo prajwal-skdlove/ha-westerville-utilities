@@ -10,6 +10,10 @@ Westerville. It's an independent integration built by reverse-engineering
 the public customer portal; see [Known limitations](#known-limitations)
 below.
 
+If this integration is useful to you, you're welcome to
+[support its development](https://buy.stripe.com/4gM28t6SP0aLdTx29Z1Jm00) --
+entirely optional, never required to use it.
+
 ## What you get
 
 - One sensor per electric/water meter showing current cumulative usage
