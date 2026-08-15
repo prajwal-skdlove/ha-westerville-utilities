@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Westerville Utility Usage</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: #1a1a1a;
+    background: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6e6e6; background: #121212; }
+    a { color: #7fc4ff; }
+    .box { background: #1e1e1e; border-color: #333; }
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .updated { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
+  @media (prefers-color-scheme: dark) { .updated { color: #999; } }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  .box {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+    background: #f7f7f7;
+  }
+  code { font-size: 0.9em; }
+  ul { padding-left: 1.25rem; }
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated: August 13, 2026</p>
+
+<div class="box">
+This policy covers two independently developed, unofficial projects, both built and
+maintained by the same developer using the same design: the
+<strong>Westerville Utility Usage (Unofficial)</strong> Android app, and the
+<strong>Westerville Utilities</strong> Home Assistant integration. Neither is affiliated
+with, endorsed by, or supported by the City of Westerville.
+</div>
+
+<h2>Short version</h2>
+<p>
+Nothing you enter or that these apps read is ever sent to the developer, an analytics
+vendor, an ad network, or any server the developer operates. The only place your
+data goes is directly from your own device to
+<a href="https://billpay.westerville.org">billpay.westerville.org</a> — the utility's
+own customer portal — using the account credentials you provide, exactly as if you had
+opened that site in a browser yourself.
+</p>
+
+<h2>What data is accessed</h2>
+<ul>
+  <li>The Westerville Utilities username/password (or access code) you enter, used only
+      to log in to <code>billpay.westerville.org</code> on your behalf.</li>
+  <li>The account, meter, usage, and billing data that portal returns for your own
+      account.</li>
+</ul>
+
+<h2>Where data is stored</h2>
+<ul>
+  <li><strong>Android app:</strong> credentials are encrypted on-device using the
+      Android Keystore (AES-256-GCM) and stored only in the app's private storage.
+      Synced usage/billing data is stored locally in the app's own database. Nothing is
+      backed up off-device, uploaded, or shared with the developer.</li>
+  <li><strong>Home Assistant integration:</strong> credentials are stored using Home
+      Assistant's own built-in, encrypted-at-rest config entry storage — the integration
+      does not maintain any storage of its own. Synced data lives in your Home
+      Assistant instance, under your control.</li>
+</ul>
+
+<h2>What is <em>not</em> collected</h2>
+<ul>
+  <li>No analytics, telemetry, or crash-reporting SDKs of any kind.</li>
+  <li>No advertising or ad identifiers.</li>
+  <li>No account, usage, or billing data is transmitted to the developer or to any
+      third party other than <code>billpay.westerville.org</code> itself.</li>
+  <li>Nothing is sold, rented, or shared.</li>
+</ul>
+
+<h2>Third-party service</h2>
+<p>
+Both projects connect only to <code>billpay.westerville.org</code>, operated by
+Westerville, Ohio's utility billing provider. That connection is governed by that
+site's own terms and privacy practices, not this policy. This project has no
+relationship with, and does not control, that portal.
+</p>
+
+<h2>Optional support link</h2>
+<p>
+Both projects show an entirely optional link to a Stripe-hosted payment page for
+readers who want to financially support development. Following that link takes you
+to Stripe's own site, governed by Stripe's own privacy policy — the developer never
+sees your payment details. Nothing about using either project ever requires visiting
+that link.
+</p>
+
+<h2>Data deletion</h2>
+<p>
+Uninstalling the Android app, or removing the Home Assistant integration, deletes all
+locally stored data (credentials and synced usage/billing history) along with it. You
+can also log out of the Android app at any time to immediately clear stored
+credentials without uninstalling.
+</p>
+
+<h2>Children's privacy</h2>
+<p>Neither project is directed at children, and neither knowingly collects data from children.</p>
+
+<h2>Changes to this policy</h2>
+<p>
+If this policy changes, the update will be posted on this same page with a revised
+"Last updated" date above.
+</p>
+
+<h2>Contact</h2>
+<p>
+Questions about this policy or either project can be opened as an issue on the
+relevant GitHub repository:
+<a href="https://github.com/prajwal-skdlove/ha-westerville-utilities">ha-westerville-utilities</a>.
+</p>
+
+</body>
+</html>
