@@ -110,13 +110,17 @@ every push.
   delay + generic exponential backoff.
 - Broader multi-account/multi-meter real-world testing.
 
-## Related project
+## Related projects
 
-This integration's Westerville client code was ported from
-[`utility-reader`](https://github.com/prajwal-skdlove/utility-reader), a
-local-first CLI that syncs the same data into a SQLite database. That
-project's `PLAN.md` documents how the portal's login flow, AMI endpoints,
-and HTML quirks were originally reverse-engineered.
+- [`utility-reader`](https://github.com/prajwal-skdlove/utility-reader) --
+  this integration's Westerville client code was ported from this
+  local-first CLI, which syncs the same data into a SQLite database. Its
+  `PLAN.md` documents how the portal's login flow, AMI endpoints, and HTML
+  quirks were originally reverse-engineered.
+- [`wv-utility-android`](https://github.com/prajwal-skdlove/wv-utility-android) --
+  a native Android app built on the same reverse-engineered client, for
+  people who want account/usage/billing info on their phone without Home
+  Assistant. Also unofficial, also on-device only.
 
 ## License
 
