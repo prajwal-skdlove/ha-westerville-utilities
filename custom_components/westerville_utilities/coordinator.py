@@ -18,6 +18,8 @@ the Energy dashboard with full history.
 
 from __future__ import annotations
 
+from bisect import bisect_left
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
@@ -113,6 +115,55 @@ def _statistic_id(meter: Meter) -> str:
 
 def _bill_statistic_id(account: Account) -> str:
     return f"{DOMAIN}:{_sanitize_id_part(account.account_id)}_bill_amount"
+
+
+def _bill_cost_statistic_id(account: Account) -> str:
+    return f"{DOMAIN}:{_sanitize_id_part(account.account_id)}_bill_cost"
+
+
+def _bill_cost_start(bill: Bill) -> datetime:
+    """Local midnight on the bill's period_end date.
+
+    The portal gives a bare date, parsed as UTC midnight. In a US timezone
+    that instant is the previous local evening, so a bill dated the 1st
+    would land in the previous month's cost.
+    """
+    return dt_util.start_of_local_day(bill.period_end.date())
+
+
+def _with_month_anchors(
+    stats: list[StatisticData], prior_start_ts: float | None, prior_sum: float
+) -> list[StatisticData]:
+    """Add zero-change rows at local midnight on the 1st of each month.
+
+    A meter billed monthly yields about one row a month, so a calendar
+    month can hold none -- and a month with no row is absent from Home
+    Assistant's monthly statistics instead of showing a change of zero.
+    Each anchor repeats the cumulative sum of the row before it.
+
+    `stats` must be sorted by start. Anchors cover the span from the
+    last already-imported row (`prior_start_ts`, if any) to the last new
+    row, and never go past it: the newest row has to stay a real one, or
+    the next refresh would read an anchor's start as "newest imported" and
+    drop real readings dated before it. A real row at the same instant
+    always wins over an anchor.
+    """
+    if not stats:
+        return stats
+    starts = [s["start"] for s in stats]
+    first = dt_util.utc_from_timestamp(prior_start_ts) if prior_start_ts is not None else starts[0]
+    last = starts[-1]
+    taken = set(starts)
+
+    anchors: list[StatisticData] = []
+    month = dt_util.as_local(first).date().replace(day=1)
+    while (anchor_start := dt_util.start_of_local_day(month)) < last:
+        if anchor_start > first and anchor_start not in taken:
+            idx = bisect_left(starts, anchor_start)
+            carried_sum = stats[idx - 1]["sum"] if idx else prior_sum
+            anchors.append(StatisticData(start=anchor_start, state=0.0, sum=carried_sum))
+        month = (month + timedelta(days=32)).replace(day=1)
+    return sorted(stats + anchors, key=lambda s: s["start"])
 
 
 class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
@@ -249,6 +300,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         for reading in merged:
             running_sum += reading.value
             stats.append(StatisticData(start=reading.period_start, state=reading.value, sum=running_sum))
+        stats = _with_month_anchors(stats, last_start, prior_sum)
 
         metadata = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
@@ -265,6 +317,36 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         return MeterData(meter=meter, latest_value=running_sum)
 
     async def _async_update_bill_statistics(self, account: Account, bills: list[Bill]) -> None:
+        """Import bill amounts as two cumulative statistics.
+
+        `_bill_amount` is dated at each bill's period_start (the original
+        series, kept so existing history stays valid). `_bill_cost` is
+        dated at period_end, when the cost is actually incurred.
+        """
+        await self._async_import_bill_series(
+            account,
+            bills,
+            statistic_id=_bill_statistic_id(account),
+            name=f"Westerville bill amount ({account.account_id})",
+            dated_at=lambda bill: bill.period_start,
+        )
+        await self._async_import_bill_series(
+            account,
+            bills,
+            statistic_id=_bill_cost_statistic_id(account),
+            name=f"Westerville bill cost ({account.account_id})",
+            dated_at=_bill_cost_start,
+        )
+
+    async def _async_import_bill_series(
+        self,
+        account: Account,
+        bills: list[Bill],
+        *,
+        statistic_id: str,
+        name: str,
+        dated_at: Callable[[Bill], datetime],
+    ) -> None:
         """Import bill amounts as a cumulative HA statistic, month over month.
 
         Mirrors _async_update_meter_statistics's running-sum approach so
@@ -278,7 +360,6 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         statistic with no unit at all may not show up as selectable there
         even though the data exists.
         """
-        statistic_id = _bill_statistic_id(account)
         recorder = get_instance(self.hass)
 
         last_stat = await recorder.async_add_executor_job(
@@ -291,28 +372,29 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             prior_sum = float(row.get("sum") or 0.0)
             last_start = row["start"]
 
-        new_bills = sorted(bills, key=lambda b: b.period_start)
+        new_bills = sorted(bills, key=dated_at)
         if last_start is not None:
-            new_bills = [b for b in new_bills if b.period_start.timestamp() > last_start]
+            new_bills = [b for b in new_bills if dated_at(b).timestamp() > last_start]
 
         if not new_bills:
-            _LOGGER.debug("Account %s: no new bills this cycle", account.account_id)
+            _LOGGER.debug("Account %s: no new bills for %s this cycle", account.account_id, statistic_id)
             return
 
         running_sum = prior_sum
         stats: list[StatisticData] = []
         for bill in new_bills:
             running_sum += bill.amount_total
-            stats.append(StatisticData(start=bill.period_start, state=bill.amount_total, sum=running_sum))
+            stats.append(StatisticData(start=dated_at(bill), state=bill.amount_total, sum=running_sum))
+        stats = _with_month_anchors(stats, last_start, prior_sum)
 
         metadata = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
-            name=f"Westerville bill amount ({account.account_id})",
+            name=name,
             source=DOMAIN,
             statistic_id=statistic_id,
             unit_class=None,
             unit_of_measurement=self.hass.config.currency or "USD",
         )
-        _LOGGER.debug("Account %s: importing %d new bill statistic(s)", account.account_id, len(stats))
+        _LOGGER.debug("Account %s: importing %d new statistic(s) for %s", account.account_id, len(stats), statistic_id)
         async_add_external_statistics(self.hass, metadata, stats)
