@@ -4,13 +4,17 @@ incremental behavior, and statistics import.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
 import respx
 
-from homeassistant.components.recorder.statistics import get_last_statistics
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import (
+    get_last_statistics,
+    statistics_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -91,7 +95,7 @@ Highcharts.stockChart('c', {
 """
 
 
-def _mock_happy_path(consumption_table: str = HYDRO_CONSUMPTION_TABLE) -> None:
+def _mock_happy_path(consumption_table: str = HYDRO_CONSUMPTION_TABLE, bill_table: str = BILL_TABLE) -> respx.Route:
     respx.get(f"{BASE_URL}/app/login.jsp").mock(return_value=httpx.Response(200, text=LOGIN_PAGE))
     respx.post(f"{BASE_URL}/app/capricorn?para=index&platform=&deviceOS=").mock(
         return_value=httpx.Response(200, text=DASHBOARD_AFTER_LOGIN)
@@ -100,13 +104,59 @@ def _mock_happy_path(consumption_table: str = HYDRO_CONSUMPTION_TABLE) -> None:
         return_value=httpx.Response(200, text=SELECT_ACCOUNT_PAGE)
     )
     respx.get(url__regex=r".*para=myAccount.*").mock(return_value=httpx.Response(200, text=MY_ACCOUNT_PAGE))
-    respx.get(url__regex=r".*para=billInquirySelect.*").mock(return_value=httpx.Response(200, text=BILL_TABLE))
+    bill_route = respx.get(url__regex=r".*para=billInquirySelect.*").mock(
+        return_value=httpx.Response(200, text=bill_table)
+    )
     respx.get(url__regex=r".*inquiryType=hydro.*tab=probe.*").mock(
         return_value=httpx.Response(200, text=consumption_table)
     )
     respx.get(url__regex=r".*inquiryType=water.*").mock(return_value=httpx.Response(200, text=NO_TABLE))
     respx.get(url__regex=r".*inquiryType=sewer.*").mock(return_value=httpx.Response(200, text=NO_TABLE))
     respx.get(url__regex=r".*smartMeterConsumV3.*").mock(return_value=httpx.Response(200, text=AMI_NO_DATA))
+    return bill_route
+
+
+def _bill_table(*bills: tuple[str, str]) -> str:
+    cells = "".join(
+        f"<td><a>View</a></td><td>{bill_date}</td><td>${amount}</td><td>Oct 15, 2026</td>"
+        for bill_date, amount in bills
+    )
+    return (
+        '<html><body><table id="billTable"><thead><tr><th>View Bill</th><th>Date</th>'
+        f"<th>Bill Amount</th><th>Due Date</th></tr></thead><tbody>{cells}</tbody></table></body></html>"
+    )
+
+
+ALL_FOUR_BILLS = _bill_table(
+    ("Sep 29, 2026", "200.00"), ("Aug 30, 2026", "150.00"), ("Jul 31, 2026", "120.00"), ("Jul 1, 2026", "100.00")
+)
+NEWEST_TWO_BILLS = _bill_table(("Sep 29, 2026", "200.00"), ("Aug 30, 2026", "150.00"))
+# Two readings starting Jun 22 and Sep 22, so the months between hold no row.
+SPARSE_CONSUMPTION_TABLE = HYDRO_CONSUMPTION_TABLE.replace(
+    "<tbody><tr><td>900000001</td><td>Jul 22, 2026</td><td>30</td><td>10.0</td></tr></tbody>",
+    "<tbody>"
+    "<tr><td>900000001</td><td>Jul 22, 2026</td><td>30</td><td>10.0</td></tr>"
+    "<tr><td>900000001</td><td>Oct 22, 2026</td><td>30</td><td>20.0</td></tr>"
+    "</tbody>",
+)
+
+
+def _local_midnight(day: date) -> float:
+    return dt_util.start_of_local_day(day).timestamp()
+
+
+async def _stored_sums(hass: HomeAssistant, statistic_id: str) -> dict[float, float]:
+    rows = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        dt_util.utc_from_timestamp(0),
+        None,
+        {statistic_id},
+        "hour",
+        None,
+        {"sum"},
+    )
+    return {row["start"]: row["sum"] for row in rows.get(statistic_id, [])}
 
 
 def _entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -190,6 +240,103 @@ async def test_sparse_monthly_readings_get_first_of_month_anchors(recorder_mock,
     await async_wait_recording_done(hass)
     again = await hass.async_add_executor_job(get_last_statistics, hass, 10, statistic_id, True, {"sum"})
     assert {row["start"]: row["sum"] for row in again[statistic_id]} == by_start
+
+
+@respx.mock
+async def test_bill_cost_is_rebuilt_with_bills_the_portal_no_longer_returns(
+    recorder_mock, hass: HomeAssistant, monkeypatch
+) -> None:
+    # Four bills 30 days apart. Later the portal only returns the newest two.
+    bill_route = _mock_happy_path(bill_table=ALL_FOUR_BILLS)
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+    cost_id = _bill_cost_statistic_id(Account(account_id="100000-000001"))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    assert (await _stored_sums(hass, cost_id))[_local_midnight(date(2026, 9, 29))] == 570.0
+
+    # Recreate what the previous release left behind: a cost series that
+    # only holds what the portal still returns.
+    get_instance(hass).async_clear_statistics([cost_id])
+    await async_wait_recording_done(hass)
+    bill_route.mock(return_value=httpx.Response(200, text=NEWEST_TWO_BILLS))
+
+    async def _no_older_bills(self, account, bills):
+        return []
+
+    monkeypatch.setattr(WestervilleCoordinator, "_async_bills_missing_from_portal", _no_older_bills)
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    assert (await _stored_sums(hass, cost_id))[_local_midnight(date(2026, 9, 29))] == 350.0
+    monkeypatch.undo()
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    rebuilt = await _stored_sums(hass, cost_id)
+
+    # The older bills are back and every later sum, anchors included, shifted.
+    assert rebuilt[_local_midnight(date(2026, 7, 1))] == 100.0
+    assert rebuilt[_local_midnight(date(2026, 7, 31))] == 220.0
+    assert rebuilt[_local_midnight(date(2026, 8, 1))] == 220.0
+    assert rebuilt[_local_midnight(date(2026, 8, 30))] == 370.0
+    assert rebuilt[_local_midnight(date(2026, 9, 1))] == 370.0
+    assert rebuilt[_local_midnight(date(2026, 9, 29))] == 570.0
+    assert max(rebuilt.values()) == 570.0
+
+    # The rebuild happens once: another refresh changes nothing.
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    assert await _stored_sums(hass, cost_id) == rebuilt
+
+
+@respx.mock
+async def test_month_anchors_are_backfilled_across_existing_history_once(
+    recorder_mock, hass: HomeAssistant, monkeypatch
+) -> None:
+    # Import history the way the previous release did: without anchors.
+    monkeypatch.setattr(
+        "custom_components.westerville_utilities.coordinator._with_month_anchors",
+        lambda stats, prior_start_ts, prior_sum: stats,
+    )
+    _mock_happy_path(SPARSE_CONSUMPTION_TABLE, ALL_FOUR_BILLS)
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+    meter_id = "westerville_utilities:electric_900000001"
+    amount_id = "westerville_utilities:100000_000001_bill_amount"
+    cost_id = _bill_cost_statistic_id(Account(account_id="100000-000001"))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    assert len(await _stored_sums(hass, meter_id)) == 2
+    assert len(await _stored_sums(hass, cost_id)) == 4
+    amount_rows_before = len(await _stored_sums(hass, amount_id))
+    monkeypatch.undo()
+
+    # Nothing new on the portal, yet the stored history gains its anchors.
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    meter_sums = await _stored_sums(hass, meter_id)
+    cost_sums = await _stored_sums(hass, cost_id)
+    assert len(meter_sums) == 5
+    assert len(cost_sums) == 6
+    assert len(await _stored_sums(hass, amount_id)) > amount_rows_before
+    for anchor in (date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1)):
+        assert meter_sums[_local_midnight(anchor)] == 10.0
+    assert cost_sums[_local_midnight(date(2026, 8, 1))] == 220.0
+    assert cost_sums[_local_midnight(date(2026, 9, 1))] == 370.0
+    # Never past the newest real row.
+    assert max(meter_sums) == datetime(2026, 9, 22, tzinfo=UTC).timestamp()
+    assert max(cost_sums) == _local_midnight(date(2026, 9, 29))
+
+    # Idempotent: every later refresh adds nothing.
+    stored = (meter_sums, cost_sums, await _stored_sums(hass, amount_id))
+    for _ in range(2):
+        await coordinator.async_refresh()
+        await async_wait_recording_done(hass)
+    assert (
+        await _stored_sums(hass, meter_id),
+        await _stored_sums(hass, cost_id),
+        await _stored_sums(hass, amount_id),
+    ) == stored
 
 
 @respx.mock
