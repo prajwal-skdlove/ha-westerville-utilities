@@ -4,6 +4,8 @@ incremental behavior, and statistics import.
 
 from __future__ import annotations
 
+from datetime import date
+
 import httpx
 import pytest
 import respx
@@ -12,6 +14,7 @@ from homeassistant.components.recorder.statistics import get_last_statistics
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -22,6 +25,7 @@ from custom_components.westerville_utilities.client.models import Account, Meter
 from custom_components.westerville_utilities.const import DOMAIN
 from custom_components.westerville_utilities.coordinator import (
     WestervilleCoordinator,
+    _bill_cost_statistic_id,
     _bill_statistic_id,
     _statistic_id,
 )
@@ -87,7 +91,7 @@ Highcharts.stockChart('c', {
 """
 
 
-def _mock_happy_path() -> None:
+def _mock_happy_path(consumption_table: str = HYDRO_CONSUMPTION_TABLE) -> None:
     respx.get(f"{BASE_URL}/app/login.jsp").mock(return_value=httpx.Response(200, text=LOGIN_PAGE))
     respx.post(f"{BASE_URL}/app/capricorn?para=index&platform=&deviceOS=").mock(
         return_value=httpx.Response(200, text=DASHBOARD_AFTER_LOGIN)
@@ -98,7 +102,7 @@ def _mock_happy_path() -> None:
     respx.get(url__regex=r".*para=myAccount.*").mock(return_value=httpx.Response(200, text=MY_ACCOUNT_PAGE))
     respx.get(url__regex=r".*para=billInquirySelect.*").mock(return_value=httpx.Response(200, text=BILL_TABLE))
     respx.get(url__regex=r".*inquiryType=hydro.*tab=probe.*").mock(
-        return_value=httpx.Response(200, text=HYDRO_CONSUMPTION_TABLE)
+        return_value=httpx.Response(200, text=consumption_table)
     )
     respx.get(url__regex=r".*inquiryType=water.*").mock(return_value=httpx.Response(200, text=NO_TABLE))
     respx.get(url__regex=r".*inquiryType=sewer.*").mock(return_value=httpx.Response(200, text=NO_TABLE))
@@ -138,6 +142,54 @@ async def test_first_refresh_imports_monthly_and_bill_statistics(recorder_mock, 
         get_last_statistics, hass, 1, "westerville_utilities:104758_000001_bill_amount", True, {"sum"}
     )
     assert bill_stats["westerville_utilities:104758_000001_bill_amount"][0]["sum"] == 150.00
+
+
+@respx.mock
+async def test_bill_cost_statistic_is_dated_at_period_end_local_midnight(recorder_mock, hass: HomeAssistant) -> None:
+    _mock_happy_path()
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    cost_id = _bill_cost_statistic_id(Account(account_id="104758-000001"))
+    assert cost_id == "westerville_utilities:104758_000001_bill_cost"
+    cost_stats = await hass.async_add_executor_job(get_last_statistics, hass, 1, cost_id, True, {"sum"})
+    row = cost_stats[cost_id][0]
+    assert row["sum"] == 150.00
+    # BILL_TABLE's only bill is dated Jul 30, 2026.
+    assert row["start"] == dt_util.start_of_local_day(date(2026, 7, 30)).timestamp()
+
+
+@respx.mock
+async def test_sparse_monthly_readings_get_first_of_month_anchors(recorder_mock, hass: HomeAssistant) -> None:
+    sparse_table = HYDRO_CONSUMPTION_TABLE.replace(
+        "<tbody><tr><td>900000001</td><td>Jul 22, 2026</td><td>30</td><td>10.0</td></tr></tbody>",
+        "<tbody>"
+        "<tr><td>900000001</td><td>Jul 22, 2026</td><td>30</td><td>10.0</td></tr>"
+        "<tr><td>900000001</td><td>Oct 22, 2026</td><td>30</td><td>20.0</td></tr>"
+        "</tbody>",
+    )
+    _mock_happy_path(sparse_table)
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    statistic_id = "westerville_utilities:electric_900000001"
+    rows = await hass.async_add_executor_job(get_last_statistics, hass, 10, statistic_id, True, {"sum"})
+    by_start = {row["start"]: row["sum"] for row in rows[statistic_id]}
+    # Readings start Jun 22 (sum 10) and Sep 22 (sum 30); Jul 1, Aug 1 and Sep 1 hold none.
+    for anchor in (date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1)):
+        assert by_start[dt_util.start_of_local_day(anchor).timestamp()] == 10.0
+    assert max(by_start.values()) == 30.0
+    assert len(by_start) == 5
+
+    # A second refresh with unchanged data must not add or alter anything.
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+    again = await hass.async_add_executor_job(get_last_statistics, hass, 10, statistic_id, True, {"sum"})
+    assert {row["start"]: row["sum"] for row in again[statistic_id]} == by_start
 
 
 @respx.mock
