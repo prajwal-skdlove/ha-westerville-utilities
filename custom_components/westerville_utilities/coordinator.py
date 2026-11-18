@@ -33,8 +33,10 @@ from homeassistant.components.recorder.models import (
     StatisticMetaData,
 )
 from homeassistant.components.recorder.statistics import (
+    StatisticsRow,
     async_add_external_statistics,
     get_last_statistics,
+    statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, UnitOfEnergy, UnitOfVolume
@@ -111,6 +113,18 @@ def _sanitize_id_part(value: str) -> str:
 
 def _statistic_id(meter: Meter) -> str:
     return f"{DOMAIN}:{meter.utility_type.value}_{_sanitize_id_part(meter.meter_id)}"
+
+
+def _meter_metadata(meter: Meter) -> StatisticMetaData:
+    return StatisticMetaData(
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=f"Westerville {meter.utility_type.value} meter {meter.meter_id}",
+        source=DOMAIN,
+        statistic_id=_statistic_id(meter),
+        unit_class=_CONSUMPTION_UNIT_CLASS_BY_UTILITY[meter.utility_type],
+        unit_of_measurement=_CONSUMPTION_UNIT_BY_UTILITY[meter.utility_type],
+    )
 
 
 def _bill_statistic_id(account: Account) -> str:
@@ -274,6 +288,8 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             since = dt_util.utc_from_timestamp(last_start) - INCREMENTAL_OVERLAP
 
         granularities = await supported_granularities(self._client, meter)
+        # Meters with hourly/daily data have rows in every month already.
+        monthly_only = granularities == [Granularity.MONTHLY]
 
         readings = list(await fetch_monthly(self._client, meter))
         if Granularity.DAILY in granularities:
@@ -293,6 +309,8 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
 
         if not merged:
             _LOGGER.debug("Meter %s: no new readings this cycle", meter.meter_id)
+            if monthly_only:
+                await self._async_backfill_month_anchors(_meter_metadata(meter))
             return MeterData(meter=meter, latest_value=prior_sum or None)
 
         running_sum = prior_sum
@@ -302,17 +320,11 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             stats.append(StatisticData(start=reading.period_start, state=reading.value, sum=running_sum))
         stats = _with_month_anchors(stats, last_start, prior_sum)
 
-        metadata = StatisticMetaData(
-            mean_type=StatisticMeanType.NONE,
-            has_sum=True,
-            name=f"Westerville {meter.utility_type.value} meter {meter.meter_id}",
-            source=DOMAIN,
-            statistic_id=statistic_id,
-            unit_class=_CONSUMPTION_UNIT_CLASS_BY_UTILITY[meter.utility_type],
-            unit_of_measurement=_CONSUMPTION_UNIT_BY_UTILITY[meter.utility_type],
-        )
+        metadata = _meter_metadata(meter)
         _LOGGER.debug("Meter %s: importing %d new statistic(s)", meter.meter_id, len(stats))
         async_add_external_statistics(self.hass, metadata, stats)
+        if monthly_only:
+            await self._async_backfill_month_anchors(metadata)
 
         return MeterData(meter=meter, latest_value=running_sum)
 
@@ -322,21 +334,83 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         `_bill_amount` is dated at each bill's period_start (the original
         series, kept so existing history stays valid). `_bill_cost` is
         dated at period_end, when the cost is actually incurred.
+
+        The portal only returns its most recent ~2 years of bills, but
+        `_bill_amount` keeps every bill ever imported. `_bill_cost` came
+        later, so on an existing install its first import would start at
+        the portal's oldest bill. The older bills are recovered from
+        `_bill_amount`, and a cost series that lacks them is rebuilt once.
         """
+        amount_statistic_id = _bill_statistic_id(account)
+        amount_name = f"Westerville bill amount ({account.account_id})"
         await self._async_import_bill_series(
             account,
             bills,
-            statistic_id=_bill_statistic_id(account),
-            name=f"Westerville bill amount ({account.account_id})",
+            statistic_id=amount_statistic_id,
+            name=amount_name,
             dated_at=lambda bill: bill.period_start,
         )
+
+        cost_statistic_id = _bill_cost_statistic_id(account)
+        cost_name = f"Westerville bill cost ({account.account_id})"
+        older_bills = await self._async_bills_missing_from_portal(account, bills)
+        cost_rows = await self._async_statistic_rows(cost_statistic_id)
+        # Older bills shift the cumulative sum of every later row, so the
+        # whole series is rewritten rather than appended to.
+        rebuild = bool(
+            older_bills
+            and cost_rows
+            and _bill_cost_start(older_bills[0]).timestamp() < min(row["start"] for row in cost_rows)
+        )
         await self._async_import_bill_series(
             account,
-            bills,
-            statistic_id=_bill_cost_statistic_id(account),
-            name=f"Westerville bill cost ({account.account_id})",
+            older_bills + bills,
+            statistic_id=cost_statistic_id,
+            name=cost_name,
             dated_at=_bill_cost_start,
+            rebuild=rebuild,
         )
+
+        for statistic_id, name in ((amount_statistic_id, amount_name), (cost_statistic_id, cost_name)):
+            await self._async_backfill_month_anchors(self._bill_metadata(statistic_id, name))
+
+    async def _async_statistic_rows(self, statistic_id: str) -> list[StatisticsRow]:
+        """Every stored row of a statistic, oldest first, with `state` and `sum`."""
+        rows = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            dt_util.utc_from_timestamp(0),
+            None,
+            {statistic_id},
+            "hour",
+            None,
+            {"state", "sum"},
+        )
+        return rows.get(statistic_id, [])
+
+    async def _async_bills_missing_from_portal(self, account: Account, bills: list[Bill]) -> list[Bill]:
+        """Bills older than the portal's oldest, rebuilt from `_bill_amount`.
+
+        Each `_bill_amount` row starts at its bill's period_start and holds
+        the amount as `state`, so a bill ends where the next row starts.
+        Rows with a zero state are month anchors, not bills.
+        """
+        rows = [row for row in await self._async_statistic_rows(_bill_statistic_id(account)) if row["state"]]
+        portal_oldest_end = min(bill.period_end for bill in bills)
+        older: list[Bill] = []
+        for row, next_row in zip(rows, rows[1:]):
+            period_end = dt_util.utc_from_timestamp(next_row["start"])
+            if period_end >= portal_oldest_end:
+                break
+            older.append(
+                Bill(
+                    account_id=account.account_id,
+                    period_start=dt_util.utc_from_timestamp(row["start"]),
+                    period_end=period_end,
+                    amount_total=row["state"],
+                )
+            )
+        return older
 
     async def _async_import_bill_series(
         self,
@@ -346,6 +420,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         statistic_id: str,
         name: str,
         dated_at: Callable[[Bill], datetime],
+        rebuild: bool = False,
     ) -> None:
         """Import bill amounts as a cumulative HA statistic, month over month.
 
@@ -362,8 +437,14 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         """
         recorder = get_instance(self.hass)
 
-        last_stat = await recorder.async_add_executor_job(
-            get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
+        # A rebuild ignores what is stored and re-imports every bill from a
+        # zero sum, which overwrites the existing rows by start time.
+        last_stat = (
+            {}
+            if rebuild
+            else await recorder.async_add_executor_job(
+                get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
+            )
         )
         prior_sum = 0.0
         last_start: float | None = None
@@ -387,7 +468,11 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             stats.append(StatisticData(start=dated_at(bill), state=bill.amount_total, sum=running_sum))
         stats = _with_month_anchors(stats, last_start, prior_sum)
 
-        metadata = StatisticMetaData(
+        _LOGGER.debug("Account %s: importing %d new statistic(s) for %s", account.account_id, len(stats), statistic_id)
+        async_add_external_statistics(self.hass, self._bill_metadata(statistic_id, name), stats)
+
+    def _bill_metadata(self, statistic_id: str, name: str) -> StatisticMetaData:
+        return StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=name,
@@ -396,5 +481,30 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             unit_class=None,
             unit_of_measurement=self.hass.config.currency or "USD",
         )
-        _LOGGER.debug("Account %s: importing %d new statistic(s) for %s", account.account_id, len(stats), statistic_id)
-        async_add_external_statistics(self.hass, metadata, stats)
+
+    async def _async_backfill_month_anchors(self, metadata: StatisticMetaData) -> None:
+        """Add the month anchors a statistic's stored history is missing.
+
+        Anchors are only added to new imports, so history imported earlier
+        has none. Every 1st-of-month local midnight between the first and
+        the newest stored row that has no row gets one; nothing is added
+        past the newest row. Rows come from what the recorder has already
+        committed, so rows imported in this same refresh are covered by the
+        next one. Once every such start has a row, this adds nothing.
+        """
+        statistic_id = metadata["statistic_id"]
+        stored = [row for row in await self._async_statistic_rows(statistic_id) if row["sum"] is not None]
+        if len(stored) < 2:
+            return
+        stored_stats = [
+            StatisticData(start=dt_util.utc_from_timestamp(row["start"]), state=row["state"] or 0.0, sum=row["sum"])
+            for row in sorted(stored, key=lambda row: row["start"])
+        ]
+        stored_starts = {stat["start"] for stat in stored_stats}
+        missing = [
+            stat for stat in _with_month_anchors(stored_stats, None, 0.0) if stat["start"] not in stored_starts
+        ]
+        if not missing:
+            return
+        _LOGGER.debug("Backfilling %d month anchor(s) for %s", len(missing), statistic_id)
+        async_add_external_statistics(self.hass, metadata, missing)
