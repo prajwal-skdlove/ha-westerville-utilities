@@ -27,6 +27,25 @@ _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://billpay.westerville.org"
 
+# Bill-PDF links carry an opaque `key=` token. Debug logs get pasted into
+# issues, and httpx logs every request URL itself, so redact it in both places.
+_KEY_PARAM_RE = re.compile(r"([?&]key=)[^&\s\"']+")
+
+
+def redact_link_keys(text: str) -> str:
+    return _KEY_PARAM_RE.sub(r"\1<redacted>", text)
+
+
+def _redact_httpx_record(record: logging.LogRecord) -> bool:
+    message = record.getMessage()
+    if "key=" in message:
+        record.msg = redact_link_keys(message)
+        record.args = ()
+    return True
+
+
+logging.getLogger("httpx").addFilter(_redact_httpx_record)
+
 # Politeness delay between requests to the portal, and the max date span
 # smartMeterConsumV3 accepts per request before it rejects with
 # "Cannot Process Request" (confirmed: 60 days OK, 90 days rejected -- 55
@@ -59,11 +78,12 @@ CONSUMPTION_REPORT_BY_INQUIRY_TYPE = {
 async def get(client: httpx.AsyncClient, path_and_query: str) -> httpx.Response:
     """GET a Westerville portal path with politeness delay + retry."""
     url = f"{BASE_URL}{path_and_query}"
-    _LOGGER.debug("GET %s", url)
+    shown = redact_link_keys(url)
+    _LOGGER.debug("GET %s", shown)
     await asyncio.sleep(REQUEST_DELAY_SECONDS)
     resp = await client.get(url)
     resp.raise_for_status()
-    _LOGGER.debug("GET %s -> %s (%d bytes)", url, resp.status_code, len(resp.content))
+    _LOGGER.debug("GET %s -> %s (%d bytes)", shown, resp.status_code, len(resp.content))
     return resp
 
 

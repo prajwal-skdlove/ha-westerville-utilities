@@ -144,3 +144,24 @@ async def test_get_raises_after_exhausting_retries(monkeypatch):
     async with httpx.AsyncClient() as client:
         with pytest.raises(httpx.HTTPStatusError):
             await shared.get(client, "/app/always-down")
+
+
+def test_redact_link_keys_hides_the_token_and_keeps_the_rest():
+    shown = shared.redact_link_keys("https://host.test/app/viewBill?key=s3cr3t-token&x=1")
+
+    assert shown == "https://host.test/app/viewBill?key=<redacted>&x=1"
+
+
+@respx.mock
+async def test_get_keeps_the_link_key_out_of_the_logs(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(shared, "REQUEST_DELAY_SECONDS", 0)
+    respx.get(url__regex=r".*viewBill.*").mock(return_value=httpx.Response(200, content=b"%PDF"))
+
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient() as client:
+            await shared.get(client, "/app/viewBill?key=s3cr3t-token&x=1")
+
+    assert "s3cr3t-token" not in caplog.text
+    assert "key=<redacted>&x=1" in caplog.text
