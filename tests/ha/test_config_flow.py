@@ -165,6 +165,7 @@ async def test_options_flow_saves_values(recorder_mock, hass: HomeAssistant) -> 
             "update_interval_hours": 6,
             "backfill_daily_days": 100,
             "backfill_hourly_days": 10,
+            "expose_account_details": True,
         },
     )
 
@@ -173,4 +174,19 @@ async def test_options_flow_saves_values(recorder_mock, hass: HomeAssistant) -> 
         "update_interval_hours": 6.0,
         "backfill_daily_days": 100.0,
         "backfill_hourly_days": 10.0,
+        "expose_account_details": True,
     }
+
+
+async def test_options_flow_keeps_account_details_off_by_default(recorder_mock, hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data={"username": "user@example.com", "password": "hunter2"})
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"update_interval_hours": 6, "backfill_daily_days": 100, "backfill_hourly_days": 10},
+    )
+
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["expose_account_details"] is False

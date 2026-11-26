@@ -5,8 +5,9 @@ Two kinds of entities:
     state_class total_increasing). Full historical depth is imported
     directly into HA's long-term statistics by the coordinator (see
     coordinator.py) rather than derived from this entity's state history.
-  * One per account: the most recent bill, with due date/billing
-    period/service address/account holder as attributes. A plain sensor,
+  * One per account: the most recent bill, with its due date and billing
+    period as attributes. The service address and account holder are
+    attributes only when the user turns that option on. A plain sensor,
     not statistics-backed.
 """
 
@@ -25,7 +26,7 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import UtilityType
-from .const import DOMAIN
+from .const import CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS, DOMAIN
 from .coordinator import MeterData, WestervilleConfigEntry, WestervilleCoordinator
 
 PARALLEL_UPDATES = 0
@@ -134,11 +135,14 @@ class WestervilleBillSensor(CoordinatorEntity[WestervilleCoordinator], SensorEnt
         bill = self.coordinator.data.bills.get(self._account_id)
         if bill is None:
             return {}
-        account = self.coordinator.data.accounts.get(self._account_id)
-        return {
+        attributes: dict[str, str | None] = {
             "due_date": bill.due_date.isoformat() if bill.due_date else None,
             "period_start": bill.period_start.isoformat(),
             "period_end": bill.period_end.isoformat(),
-            "service_address": account.service_address if account else None,
-            "account_holder": account.name if account else None,
         }
+        options = self.coordinator.config_entry.options
+        if options.get(CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS):
+            account = self.coordinator.data.accounts.get(self._account_id)
+            attributes["service_address"] = account.service_address if account else None
+            attributes["account_holder"] = account.name if account else None
+        return attributes

@@ -35,12 +35,14 @@
         "data": {
           "update_interval_hours": "Polling interval (hours)",
           "backfill_daily_days": "Daily usage history depth (days)",
-          "backfill_hourly_days": "Hourly usage history depth (days)"
+          "backfill_hourly_days": "Hourly usage history depth (days)",
+          "expose_account_details": "Show service address and account holder on the bill sensor"
         },
         "data_description": {
           "update_interval_hours": "How often to sync with the portal. Westerville's own data lags 1-2 days behind real time, so shorter intervals just re-request the same numbers.",
           "backfill_daily_days": "How far back to import daily usage on first sync. The portal typically retains ~9 months of daily data; going further back just costs extra requests for no data.",
-          "backfill_hourly_days": "How far back to import hourly usage on first sync. The portal typically retains ~2 weeks of hourly data."
+          "backfill_hourly_days": "How far back to import hourly usage on first sync. The portal typically retains ~2 weeks of hourly data.",
+          "expose_account_details": "Off by default. Sensor attributes are saved in Home Assistant's history database and can be read by dashboards, voice assistants and other integrations, so the address and name stay out of them unless you turn this on."
         }
       }
     }

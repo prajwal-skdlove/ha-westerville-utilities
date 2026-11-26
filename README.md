@@ -23,8 +23,12 @@ entirely optional, never required to use it.
   back -- imported into Home Assistant's long-term statistics, so it shows
   up correctly in **Settings -> Dashboards -> Energy** once you add the
   Westerville statistics there.
-- One sensor per account with your most recent bill amount, due date,
-  billing period, service address, and account holder name as attributes.
+- One sensor per account with your most recent bill amount, due date, and
+  billing period as attributes. The service address and account holder's
+  name are **not** shown unless you turn on *Show service address and
+  account holder* in the integration's options: attributes are saved in
+  Home Assistant's history database and can be read by dashboards, voice
+  assistants and other integrations.
 - Bill amounts are also imported as a long-term statistic (running total
   billed, one point per billing period) so bill cost is graphable
   month-over-month via a Statistics Graph card or Developer Tools ->

@@ -110,8 +110,9 @@ async def test_meter_and_bill_sensors_created_on_entry_setup(recorder_mock, hass
     assert bill_state.state == "150.0"
     assert bill_state.attributes["device_class"] == SensorDeviceClass.MONETARY
     assert bill_state.attributes["due_date"] == "2026-08-15T00:00:00+00:00"
-    assert bill_state.attributes["service_address"] == "789 Test St, Westerville, OH 43081-1234"
-    assert bill_state.attributes["account_holder"] == "Jane Tester"
+    # The address and name stay out of the history database unless the user opts in.
+    assert "service_address" not in bill_state.attributes
+    assert "account_holder" not in bill_state.attributes
 
 
 @respx.mock
@@ -134,3 +135,21 @@ async def test_unload_entry_removes_entities(recorder_mock, hass: HomeAssistant)
     state = hass.states.get("sensor.electric_900000001_usage")
     assert state is not None
     assert state.state == "unavailable"
+
+
+@respx.mock
+async def test_bill_sensor_shows_address_and_holder_only_when_opted_in(recorder_mock, hass: HomeAssistant) -> None:
+    _mock_happy_path()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"username": "user@example.com", "password": "hunter2"},
+        options={"expose_account_details": True},
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    attributes = hass.states.get("sensor.westerville_account_100000_000001_latest_bill").attributes
+    assert attributes["service_address"] == "789 Test St, Westerville, OH 43081-1234"
+    assert attributes["account_holder"] == "Jane Tester"

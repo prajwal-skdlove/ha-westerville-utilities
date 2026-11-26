@@ -12,15 +12,22 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers.httpx_client import create_async_httpx_client
-from homeassistant.helpers.selector import NumberSelector, NumberSelectorConfig, NumberSelectorMode
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
 from .client import CannotConnect, InvalidAuth, authenticate
 from .const import (
     CONF_BACKFILL_DAILY_DAYS,
     CONF_BACKFILL_HOURLY_DAYS,
+    CONF_EXPOSE_ACCOUNT_DETAILS,
     CONF_UPDATE_INTERVAL_HOURS,
     DEFAULT_BACKFILL_DAILY_DAYS,
     DEFAULT_BACKFILL_HOURLY_DAYS,
+    DEFAULT_EXPOSE_ACCOUNT_DETAILS,
     DEFAULT_UPDATE_INTERVAL_HOURS,
     DOMAIN,
 )
@@ -143,6 +150,10 @@ class WestervilleOptionsFlow(OptionsFlow):
                     CONF_BACKFILL_HOURLY_DAYS,
                     default=current.get(CONF_BACKFILL_HOURLY_DAYS, DEFAULT_BACKFILL_HOURLY_DAYS),
                 ): NumberSelector(NumberSelectorConfig(min=1, max=365, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Optional(
+                    CONF_EXPOSE_ACCOUNT_DETAILS,
+                    default=current.get(CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS),
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
