@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 import logging
 
@@ -49,9 +49,11 @@ from homeassistant.util.unit_conversion import EnergyConverter, VolumeConverter
 
 from .client import Account, Bill, CannotConnect, InvalidAuth, Meter, UtilityType, authenticate
 from .client.accounts import list_accounts, list_meters, supported_granularities
-from .client.bills import fetch_bills
+from .client.bill_pdf import read_bill
+from .client.bills import download_bill_pdf, fetch_bills
 from .client.merge import merge_readings
 from .client.models import Granularity
+from .client.shared import redact_link_keys
 from .client.usage import fetch_daily, fetch_hourly, fetch_monthly
 from .const import (
     CONF_BACKFILL_DAILY_DAYS,
@@ -129,6 +131,14 @@ def _meter_metadata(meter: Meter) -> StatisticMetaData:
 
 def _bill_statistic_id(account: Account) -> str:
     return f"{DOMAIN}:{_sanitize_id_part(account.account_id)}_bill_amount"
+
+
+def _bill_amount(bill: Bill) -> float:
+    return bill.amount_total
+
+
+def _bill_component_statistic_id(account: Account, component: str) -> str:
+    return f"{DOMAIN}:{_sanitize_id_part(account.account_id)}_bill_cost_{component}"
 
 
 def _bill_cost_statistic_id(account: Account) -> str:
@@ -235,6 +245,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
                 _LOGGER.warning("Error fetching bills for account %s: %s", account.account_id, err)
                 bills = []
             if bills:
+                bills = await self._async_attach_bill_details(account, bills)
                 bills_by_account[account.account_id] = max(bills, key=lambda b: b.period_end)
                 await self._async_update_bill_statistics(account, bills)
 
@@ -374,6 +385,57 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         for statistic_id, name in ((amount_statistic_id, amount_name), (cost_statistic_id, cost_name)):
             await self._async_backfill_month_anchors(self._bill_metadata(statistic_id, name))
 
+        await self._async_update_component_statistics(account, bills)
+
+    async def _async_attach_bill_details(self, account: Account, bills: list[Bill]) -> list[Bill]:
+        """Read the PDF of each bill that has not been read yet and attach what it holds.
+
+        A bill's PDF is read once: bills dated after the newest row of the
+        electric component series. The newest bill is always read, because
+        the latest-bill sensor shows its detail and nothing else keeps it
+        across a restart.
+        """
+        electric_rows = await self._async_statistic_rows(_bill_component_statistic_id(account, "electric"))
+        newest_read = max((row["start"] for row in electric_rows), default=None)
+        latest = max(bills, key=lambda bill: bill.period_end)
+        return [
+            await self._async_read_bill(bill)
+            if bill is latest or newest_read is None or _bill_cost_start(bill).timestamp() > newest_read
+            else bill
+            for bill in bills
+        ]
+
+    async def _async_read_bill(self, bill: Bill) -> Bill:
+        label = bill.period_end.date().isoformat()
+        try:
+            pdf = await download_bill_pdf(self._client, bill)
+        except httpx.HTTPError as err:
+            # The error text contains the bill link, key included.
+            _LOGGER.warning(
+                "Bill %s: could not download the PDF (%s); detail left empty", label, redact_link_keys(str(err))
+            )
+            return bill
+        if pdf is None:
+            return bill
+        # pypdf is synchronous and CPU-bound, so keep it off the event loop.
+        details = await self.hass.async_add_executor_job(read_bill, pdf, bill.amount_total, label)
+        return replace(bill, details=details)
+
+    async def _async_update_component_statistics(self, account: Account, bills: list[Bill]) -> None:
+        """Import each bill component (electric, EV charge, water, ...) as its own cumulative cost series."""
+        for component in sorted({key for bill in bills for key in bill.details.components}):
+            statistic_id = _bill_component_statistic_id(account, component)
+            name = f"Westerville bill cost, {component.replace('_', ' ')} ({account.account_id})"
+            await self._async_import_bill_series(
+                account,
+                [bill for bill in bills if component in bill.details.components],
+                statistic_id=statistic_id,
+                name=name,
+                dated_at=_bill_cost_start,
+                amount_of=lambda bill, component=component: bill.details.components[component],
+            )
+            await self._async_backfill_month_anchors(self._bill_metadata(statistic_id, name))
+
     async def _async_statistic_rows(self, statistic_id: str) -> list[StatisticsRow]:
         """Every stored row of a statistic, oldest first, with `state` and `sum`."""
         rows = await get_instance(self.hass).async_add_executor_job(
@@ -420,6 +482,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         statistic_id: str,
         name: str,
         dated_at: Callable[[Bill], datetime],
+        amount_of: Callable[[Bill], float] = _bill_amount,
         rebuild: bool = False,
     ) -> None:
         """Import bill amounts as a cumulative HA statistic, month over month.
@@ -464,8 +527,8 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         running_sum = prior_sum
         stats: list[StatisticData] = []
         for bill in new_bills:
-            running_sum += bill.amount_total
-            stats.append(StatisticData(start=dated_at(bill), state=bill.amount_total, sum=running_sum))
+            running_sum += amount_of(bill)
+            stats.append(StatisticData(start=dated_at(bill), state=amount_of(bill), sum=running_sum))
         stats = _with_month_anchors(stats, last_start, prior_sum)
 
         _LOGGER.debug("Account %s: importing %d new statistic(s) for %s", account.account_id, len(stats), statistic_id)

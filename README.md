@@ -23,12 +23,13 @@ entirely optional, never required to use it.
   back -- imported into Home Assistant's long-term statistics, so it shows
   up correctly in **Settings -> Dashboards -> Energy** once you add the
   Westerville statistics there.
-- One sensor per account with your most recent bill amount, due date, and
-  billing period as attributes. The service address and account holder's
-  name are **not** shown unless you turn on *Show service address and
-  account holder* in the integration's options: attributes are saved in
-  Home Assistant's history database and can be read by dashboards, voice
-  assistants and other integrations.
+- One sensor per account with your most recent bill amount and due date.
+  Its attributes also hold what the bill's PDF itemises: the amount per
+  component (`electric`, `ev_charge`, `water`, `sewer`, `trash`), every line
+  item (usage, rate, amount), each meter's read dates and usage, and the
+  billing period the meters were actually read for. The service address and
+  account holder's name are **not** shown unless you turn on *Show service
+  address and account holder* in the integration's options.
 - Bill amounts are also imported as a long-term statistic (running total
   billed, one point per billing period) so bill cost is graphable
   month-over-month via a Statistics Graph card or Developer Tools ->
@@ -36,6 +37,13 @@ entirely optional, never required to use it.
   Westerville bills electric + water (+ sewer) together as one amount, so
   this isn't split per utility; linking it as "cost" for a single source in
   the Energy dashboard would overstate that source's cost.
+- Each bill component is also imported as its own cost statistic
+  (`<domain>:<account>_bill_cost_electric`, `..._ev_charge`, `..._water`,
+  `..._sewer`, `..._trash`), dated at the bill date. These come from the
+  bills' PDFs, so they start at the oldest bill the portal still lists as a
+  PDF. The EV component is the EV off-peak charging credit, so it is
+  negative. A bill whose parts do not add up to its total is still imported,
+  with a warning in the log and the difference in a `..._unallocated` series.
 - Multi-meter support: if your account has more than one meter for a
   utility (e.g. a separate EV-charging submeter), each shows up as its own
   device.
@@ -78,9 +86,15 @@ update, this is just an options change, not new Python being loaded).
 
 ## Known limitations
 
-- **Bill billing-period start dates are approximate.** The portal's bill
-  history table has no explicit period-start column; it's inferred from
-  the previous bill's date (or 30 days back, for the oldest bill fetched).
+- **The `period_start` and `period_end` attributes are approximate.** The
+  portal's bill history table has no explicit period-start column; it's
+  inferred from the previous bill's date (or 30 days back, for the oldest
+  bill fetched). `billing_period_start` and `billing_period_end` come from the
+  bill's PDF and are the dates the meters were actually read.
+- **Bill detail comes from reading a PDF**, so a change to the bill's layout
+  can leave a bill without detail (a warning in the log says which). Each
+  bill's PDF is read once, and only the numbers and dates are kept: not the
+  PDF, its link, your name or your address.
 - **This integration scrapes server-rendered HTML and an inline chart
   script**, not a documented API -- if Westerville changes the portal's
   page layout, syncing can break until the integration is updated. Debug

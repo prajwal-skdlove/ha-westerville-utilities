@@ -4,6 +4,7 @@ incremental behavior, and statistics import.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 
 import httpx
@@ -24,7 +25,10 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 
+from tests.client.synthetic_bill import BILL_COMPONENTS, BILL_LINES, pdf_with_lines
+
 from custom_components.westerville_utilities.client import CannotConnect, InvalidAuth
+from custom_components.westerville_utilities.client import shared
 from custom_components.westerville_utilities.client.models import Account, Meter, UtilityType
 from custom_components.westerville_utilities.const import DOMAIN
 from custom_components.westerville_utilities.coordinator import (
@@ -440,3 +444,103 @@ async def test_options_default_when_unset(recorder_mock, hass: HomeAssistant) ->
     assert coordinator.update_interval.total_seconds() == 24 * 3600
     assert coordinator._backfill_daily_days == 400
     assert coordinator._backfill_hourly_days == 30
+
+
+# --- bill PDF components -----------------------------------------------------
+
+PDF_PATH = "/app/viewBill?key=abc123"
+
+
+def _linked_bill_table(*bills: tuple[str, str]) -> str:
+    cells = "".join(
+        f'<td><a data-url="{PDF_PATH}" href="#">View</a></td><td>{bill_date}</td><td>${amount}</td>'
+        "<td>Oct 15, 2026</td>"
+        for bill_date, amount in bills
+    )
+    return (
+        '<html><body><table id="billTable"><thead><tr><th>View Bill</th><th>Date</th>'
+        f"<th>Bill Amount</th><th>Due Date</th></tr></thead><tbody>{cells}</tbody></table></body></html>"
+    )
+
+
+def _component_id(component: str) -> str:
+    return f"westerville_utilities:100000_000001_bill_cost_{component}"
+
+
+@respx.mock
+async def test_bill_components_are_imported_as_cost_statistics_and_each_pdf_is_read_once(
+    recorder_mock, hass: HomeAssistant
+) -> None:
+    _mock_happy_path(bill_table=_linked_bill_table(("Jul 30, 2026", "28.60"), ("Jun 30, 2026", "28.60")))
+    pdf_route = respx.get(url__regex=r".*viewBill.*").mock(
+        return_value=httpx.Response(200, content=pdf_with_lines(BILL_LINES))
+    )
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    assert pdf_route.call_count == 2
+    june, july = _local_midnight(date(2026, 6, 30)), _local_midnight(date(2026, 7, 30))
+    for component, amount in BILL_COMPONENTS.items():
+        sums = await _stored_sums(hass, _component_id(component))
+        assert sums[june] == pytest.approx(amount)
+        assert sums[july] == pytest.approx(amount * 2)
+    assert not await _stored_sums(hass, _component_id("unallocated"))
+    latest = coordinator.data.bills["100000-000001"]
+    assert latest.details.components == BILL_COMPONENTS
+    assert len(latest.details.line_items) == 6
+    assert len(latest.details.meter_reads) == 3
+    first = {
+        component: await _stored_sums(hass, _component_id(component)) for component in BILL_COMPONENTS
+    }
+
+    # Next refresh: only the newest bill is read again, and nothing changes.
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    assert pdf_route.call_count == 3
+    for component in BILL_COMPONENTS:
+        assert await _stored_sums(hass, _component_id(component)) == first[component]
+
+
+@respx.mock
+async def test_bill_that_does_not_reconcile_keeps_its_components_and_gets_an_unallocated_series(
+    recorder_mock, hass: HomeAssistant, caplog
+) -> None:
+    _mock_happy_path(bill_table=_linked_bill_table(("Jul 30, 2026", "30.10")))
+    respx.get(url__regex=r".*viewBill.*").mock(
+        return_value=httpx.Response(200, content=pdf_with_lines(BILL_LINES))
+    )
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+
+    await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    sums = await _stored_sums(hass, _component_id("unallocated"))
+    assert sums[_local_midnight(date(2026, 7, 30))] == pytest.approx(1.5)
+    assert (await _stored_sums(hass, _component_id("electric")))[_local_midnight(date(2026, 7, 30))] == 11.0
+    assert "stored 1.50 as unallocated" in caplog.text
+
+
+@respx.mock
+async def test_failed_pdf_download_keeps_the_bill_and_never_logs_the_link_key(
+    recorder_mock, hass: HomeAssistant, monkeypatch, caplog
+) -> None:
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(shared.get.retry, "sleep", _no_sleep)
+    _mock_happy_path(bill_table=_linked_bill_table(("Jul 30, 2026", "28.60")))
+    respx.get(url__regex=r".*viewBill.*").mock(return_value=httpx.Response(500))
+    coordinator = WestervilleCoordinator(hass, _entry(hass))
+
+    with caplog.at_level(logging.DEBUG):
+        await coordinator.async_refresh()
+    await async_wait_recording_done(hass)
+
+    assert coordinator.last_update_success is True
+    assert coordinator.data.bills["100000-000001"].details.components == {}
+    assert not await _stored_sums(hass, _component_id("electric"))
+    assert "could not download the PDF" in caplog.text
+    assert "abc123" not in caplog.text

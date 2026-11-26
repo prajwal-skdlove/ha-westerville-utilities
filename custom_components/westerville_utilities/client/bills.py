@@ -37,11 +37,16 @@ async def fetch_bills(client: httpx.AsyncClient, account: Account) -> list[Bill]
         _LOGGER.debug("No bill table for account %s; nothing to sync", account.account_id)
         return []
 
-    cells = [c.get_text(strip=True) for c in table.find("tbody").find_all("td")]
+    tds = table.find("tbody").find_all("td")
+    cells = [c.get_text(strip=True) for c in tds]
     rows = [cells[i : i + 4] for i in range(0, len(cells) - 3, 4)]
+    pdf_urls = [
+        link.get("data-url") if (link := tds[i].find("a")) is not None else None
+        for i in range(0, len(tds) - 3, 4)
+    ]
 
-    parsed: list[tuple[datetime, float, datetime | None]] = []
-    for _view_bill, date_text, amount_text, due_date_text in rows:
+    parsed: list[tuple[datetime, float, datetime | None, str | None]] = []
+    for (_view_bill, date_text, amount_text, due_date_text), pdf_url in zip(rows, pdf_urls):
         try:
             bill_date = datetime.strptime(date_text, "%b %d, %Y").replace(tzinfo=UTC)
             amount = float(amount_text.replace("$", "").replace(",", ""))
@@ -52,14 +57,14 @@ async def fetch_bills(client: httpx.AsyncClient, account: Account) -> list[Bill]
             due_date = datetime.strptime(due_date_text, "%b %d, %Y").replace(tzinfo=UTC)
         except ValueError:
             due_date = None
-        parsed.append((bill_date, amount, due_date))
+        parsed.append((bill_date, amount, due_date, pdf_url))
 
     # Portal returns most-recent-first; keep that assumption explicit rather
     # than relying on incoming order.
     parsed.sort(key=lambda r: r[0], reverse=True)
 
     bills: list[Bill] = []
-    for i, (bill_date, amount, due_date) in enumerate(parsed):
+    for i, (bill_date, amount, due_date, pdf_url) in enumerate(parsed):
         period_start = parsed[i + 1][0] if i + 1 < len(parsed) else bill_date - timedelta(days=_FALLBACK_PERIOD_DAYS)
         bills.append(
             Bill(
@@ -68,8 +73,28 @@ async def fetch_bills(client: httpx.AsyncClient, account: Account) -> list[Bill]
                 period_end=bill_date,
                 amount_total=amount,
                 due_date=due_date,
+                pdf_url=pdf_url,
             )
         )
 
     _LOGGER.debug("Account %s: parsed %d bill(s)", account.account_id, len(bills))
     return bills
+
+
+async def download_bill_pdf(client: httpx.AsyncClient, bill: Bill) -> bytes | None:
+    """The bill's PDF, or None if it has no link or the portal did not return a PDF.
+
+    The PDF only ever lives in memory: callers parse it and drop it.
+    """
+    label = bill.period_end.date().isoformat()
+    if not bill.pdf_url:
+        return None
+    if not bill.pdf_url.startswith("/app/"):
+        # Only ever follow a path on the portal itself with the logged-in session.
+        _LOGGER.warning("Bill %s: unexpected bill link; detail left empty", label)
+        return None
+    resp = await get(client, bill.pdf_url)
+    if not resp.content.startswith(b"%PDF"):
+        _LOGGER.warning("Bill %s: the bill link did not return a PDF; detail left empty", label)
+        return None
+    return resp.content

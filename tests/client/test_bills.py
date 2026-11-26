@@ -8,8 +8,8 @@ import httpx
 import respx
 
 from client import shared
-from client.bills import fetch_bills
-from client.models import Account
+from client.bills import download_bill_pdf, fetch_bills
+from client.models import Account, Bill
 
 
 def _bill_table(rows_html: str) -> str:
@@ -105,3 +105,82 @@ async def test_fetch_bills_missing_table(monkeypatch):
 
     async with httpx.AsyncClient() as client:
         assert await fetch_bills(client, ACCOUNT) == []
+
+
+# --- bill PDF link and download -------------------------------------------
+
+PDF_PATH = "/app/viewBill?key=abc123"
+
+
+def _linked_table(pdf_path: str | None) -> str:
+    link = f'<a data-url="{pdf_path}" href="#">View</a>' if pdf_path else "<a>View</a>"
+    return _bill_table(f"<td>{link}</td><td>Jul 30, 2026</td><td>$28.60</td><td>Aug 15, 2026</td>")
+
+
+def _bill(pdf_url: str | None) -> Bill:
+    return Bill(
+        account_id="100000-000001",
+        period_start=datetime(2026, 6, 26, tzinfo=UTC),
+        period_end=datetime(2026, 7, 30, tzinfo=UTC),
+        amount_total=28.60,
+        pdf_url=pdf_url,
+    )
+
+
+@respx.mock
+async def test_fetch_bills_keeps_each_rows_pdf_link(monkeypatch):
+    monkeypatch.setattr(shared, "REQUEST_DELAY_SECONDS", 0)
+    respx.get(url__regex=r".*billInquirySelect.*").mock(return_value=httpx.Response(200, text=_linked_table(PDF_PATH)))
+
+    async with httpx.AsyncClient() as client:
+        parsed = await fetch_bills(client, ACCOUNT)
+
+    assert parsed[0].pdf_url == PDF_PATH
+
+
+@respx.mock
+async def test_fetch_bills_without_a_link_has_no_pdf_url(monkeypatch):
+    monkeypatch.setattr(shared, "REQUEST_DELAY_SECONDS", 0)
+    respx.get(url__regex=r".*billInquirySelect.*").mock(return_value=httpx.Response(200, text=_linked_table(None)))
+
+    async with httpx.AsyncClient() as client:
+        parsed = await fetch_bills(client, ACCOUNT)
+
+    assert parsed[0].pdf_url is None
+
+
+def test_the_pdf_link_is_not_in_a_bills_repr():
+    assert "abc123" not in repr(_bill(PDF_PATH))
+
+
+@respx.mock
+async def test_download_bill_pdf_returns_the_pdf_bytes(monkeypatch):
+    monkeypatch.setattr(shared, "REQUEST_DELAY_SECONDS", 0)
+    respx.get(url__regex=r".*viewBill.*").mock(return_value=httpx.Response(200, content=b"%PDF-1.4 body"))
+
+    async with httpx.AsyncClient() as client:
+        assert await download_bill_pdf(client, _bill(PDF_PATH)) == b"%PDF-1.4 body"
+
+
+@respx.mock
+async def test_download_bill_pdf_is_none_without_a_link():
+    async with httpx.AsyncClient() as client:
+        assert await download_bill_pdf(client, _bill(None)) is None
+
+
+@respx.mock
+async def test_download_bill_pdf_never_follows_a_link_off_the_portal():
+    elsewhere = respx.get(url__regex=r".*example\.test.*").mock(return_value=httpx.Response(200))
+
+    async with httpx.AsyncClient() as client:
+        assert await download_bill_pdf(client, _bill("https://example.test/bill.pdf")) is None
+    assert not elsewhere.called
+
+
+@respx.mock
+async def test_download_bill_pdf_is_none_when_the_link_does_not_return_a_pdf(monkeypatch):
+    monkeypatch.setattr(shared, "REQUEST_DELAY_SECONDS", 0)
+    respx.get(url__regex=r".*viewBill.*").mock(return_value=httpx.Response(200, text="<html>login</html>"))
+
+    async with httpx.AsyncClient() as client:
+        assert await download_bill_pdf(client, _bill(PDF_PATH)) is None

@@ -11,11 +11,24 @@ from __future__ import annotations
 
 from .auth import authenticate
 from .exceptions import CannotConnect, InvalidAuth, WestervilleError
-from .models import Account, Bill, Granularity, Meter, Reading, UtilityType
+from .models import (
+    Account,
+    Bill,
+    BillDetails,
+    BillLineItem,
+    BillMeterRead,
+    Granularity,
+    Meter,
+    Reading,
+    UtilityType,
+)
 
 __all__ = [
     "Account",
     "Bill",
+    "BillDetails",
+    "BillLineItem",
+    "BillMeterRead",
     "CannotConnect",
     "Granularity",
     "InvalidAuth",

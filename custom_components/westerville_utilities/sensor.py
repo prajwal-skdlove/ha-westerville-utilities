@@ -5,13 +5,15 @@ Two kinds of entities:
     state_class total_increasing). Full historical depth is imported
     directly into HA's long-term statistics by the coordinator (see
     coordinator.py) rather than derived from this entity's state history.
-  * One per account: the most recent bill, with its due date and billing
-    period as attributes. The service address and account holder are
-    attributes only when the user turns that option on. A plain sensor,
-    not statistics-backed.
+  * One per account: the most recent bill, with its due date, billing
+    periods, component amounts, line items and meter reads as attributes.
+    The service address and account holder are attributes only when the
+    user turns that option on. A plain sensor, not statistics-backed.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -131,15 +133,53 @@ class WestervilleBillSensor(CoordinatorEntity[WestervilleCoordinator], SensorEnt
         return bill.amount_total if bill else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         bill = self.coordinator.data.bills.get(self._account_id)
         if bill is None:
             return {}
-        attributes: dict[str, str | None] = {
+        attributes: dict[str, Any] = {
             "due_date": bill.due_date.isoformat() if bill.due_date else None,
             "period_start": bill.period_start.isoformat(),
             "period_end": bill.period_end.isoformat(),
         }
+
+        # Numbers and dates from the bill's PDF only: never the PDF text, its
+        # link, the customer's name or the address.
+        details = bill.details
+        if details.components:
+            attributes["components"] = dict(details.components)
+            attributes["line_items"] = [
+                {
+                    "component": item.component,
+                    "description": item.description,
+                    "usage": item.quantity,
+                    "rate": item.rate,
+                    "amount": item.amount,
+                }
+                for item in details.line_items
+            ]
+        if details.meter_reads:
+            # The dates the meters were actually billed for, unlike the period
+            # above, which is only estimated from the neighbouring bill's date.
+            attributes["billing_period_start"] = min(r.previous_read_date for r in details.meter_reads).date().isoformat()
+            attributes["billing_period_end"] = max(r.current_read_date for r in details.meter_reads).date().isoformat()
+            attributes["meter_reads"] = [
+                {
+                    "service": read.service,
+                    "meter_id": read.meter_id,
+                    "read_type": read.read_type,
+                    "previous_read_date": read.previous_read_date.date().isoformat(),
+                    "current_read_date": read.current_read_date.date().isoformat(),
+                    "billing_days": read.billing_days,
+                    "previous_read": read.previous_read,
+                    "current_read": read.current_read,
+                    "multiplier": read.multiplier,
+                    "usage": read.usage,
+                    "unit": read.unit,
+                }
+                for read in details.meter_reads
+            ]
+
         options = self.coordinator.config_entry.options
         if options.get(CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS):
             account = self.coordinator.data.accounts.get(self._account_id)
