@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -11,6 +13,7 @@ from custom_components.westerville_utilities.client import CannotConnect, Invali
 from custom_components.westerville_utilities.const import DOMAIN
 
 PATCH_TARGET = "custom_components.westerville_utilities.config_flow.authenticate"
+SETUP_TARGET = "custom_components.westerville_utilities.async_setup_entry"
 
 
 async def _start_user_flow(hass: HomeAssistant):
@@ -24,6 +27,10 @@ async def test_user_step_creates_entry_on_success(recorder_mock, hass: HomeAssis
         return None
 
     monkeypatch.setattr(PATCH_TARGET, _ok)
+    # Creating the entry makes Home Assistant set it up, and setup's first
+    # refresh would log in to the real portal. This test is about the flow.
+    mock_setup = AsyncMock(return_value=True)
+    monkeypatch.setattr(SETUP_TARGET, mock_setup)
 
     result = await _start_user_flow(hass)
     assert result["type"] is FlowResultType.FORM
@@ -36,6 +43,8 @@ async def test_user_step_creates_entry_on_success(recorder_mock, hass: HomeAssis
     assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["title"] == "Westerville Utilities (user@example.com)"
     assert result2["data"] == {"username": "user@example.com", "password": "hunter2"}
+    await hass.async_block_till_done()
+    assert len(mock_setup.mock_calls) == 1
 
 
 async def test_user_step_shows_invalid_auth_error(recorder_mock, hass: HomeAssistant, monkeypatch) -> None:
