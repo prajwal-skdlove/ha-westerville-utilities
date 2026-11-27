@@ -47,6 +47,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import EnergyConverter, VolumeConverter
 
+from .bill_history import BillHistory, BillRecords, bill_key
 from .client import Account, Bill, CannotConnect, InvalidAuth, Meter, UtilityType, authenticate
 from .client.accounts import list_accounts, list_meters, supported_granularities
 from .client.bill_pdf import read_bill
@@ -99,6 +100,7 @@ class WestervilleData:
     accounts: dict[str, Account]
     meters: dict[str, MeterData]
     bills: dict[str, Bill]  # account_id -> most recent bill
+    bill_history: BillRecords  # every bill read so far, for the bill month picker
     last_updated: datetime = field(default_factory=dt_util.utcnow)
 
 
@@ -207,6 +209,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         )
         self._username: str = config_entry.data[CONF_USERNAME]
         self._password: str = config_entry.data[CONF_PASSWORD]
+        self._bill_history = BillHistory(hass, config_entry.entry_id)
         self._backfill_daily_days = options.get(CONF_BACKFILL_DAILY_DAYS, DEFAULT_BACKFILL_DAILY_DAYS)
         self._backfill_hourly_days = options.get(CONF_BACKFILL_HOURLY_DAYS, DEFAULT_BACKFILL_HOURLY_DAYS)
         # A dedicated client (not the shared HA-wide one) so this entry's
@@ -217,6 +220,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         )
 
     async def _async_update_data(self) -> WestervilleData:
+        await self._bill_history.async_load()
         try:
             await authenticate(self._client, self._username, self._password)
         except InvalidAuth as err:
@@ -246,6 +250,7 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
                 bills = []
             if bills:
                 bills = await self._async_attach_bill_details(account, bills)
+                await self._bill_history.async_update(account.account_id, bills)
                 bills_by_account[account.account_id] = max(bills, key=lambda b: b.period_end)
                 await self._async_update_bill_statistics(account, bills)
 
@@ -273,6 +278,9 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
             accounts=accounts_by_id,
             meters=meters_by_id,
             bills=bills_by_account,
+            bill_history={
+                account_id: self._bill_history.records(account_id) for account_id in accounts_by_id
+            },
         )
 
     async def _async_update_meter_statistics(self, meter: Meter) -> MeterData:
@@ -391,16 +399,20 @@ class WestervilleCoordinator(DataUpdateCoordinator[WestervilleData]):
         """Read the PDF of each bill that has not been read yet and attach what it holds.
 
         A bill's PDF is read once: bills dated after the newest row of the
-        electric component series. The newest bill is always read, because
-        the latest-bill sensor shows its detail and nothing else keeps it
-        across a restart.
+        electric component series, and bills whose detail the bill history
+        does not hold yet (so the first run after an update reads the older
+        ones). The newest bill is always read, because the latest-bill
+        sensor shows its detail.
         """
         electric_rows = await self._async_statistic_rows(_bill_component_statistic_id(account, "electric"))
         newest_read = max((row["start"] for row in electric_rows), default=None)
         latest = max(bills, key=lambda bill: bill.period_end)
         return [
             await self._async_read_bill(bill)
-            if bill is latest or newest_read is None or _bill_cost_start(bill).timestamp() > newest_read
+            if bill is latest
+            or newest_read is None
+            or _bill_cost_start(bill).timestamp() > newest_read
+            or not self._bill_history.has_detail(account.account_id, bill_key(bill))
             else bill
             for bill in bills
         ]

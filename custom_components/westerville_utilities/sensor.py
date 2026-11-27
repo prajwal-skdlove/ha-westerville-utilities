@@ -27,6 +27,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .bill_history import bill_attributes
 from .client import UtilityType
 from .const import CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS, DOMAIN
 from .coordinator import MeterData, WestervilleConfigEntry, WestervilleCoordinator
@@ -137,48 +138,9 @@ class WestervilleBillSensor(CoordinatorEntity[WestervilleCoordinator], SensorEnt
         bill = self.coordinator.data.bills.get(self._account_id)
         if bill is None:
             return {}
-        attributes: dict[str, Any] = {
-            "due_date": bill.due_date.isoformat() if bill.due_date else None,
-            "period_start": bill.period_start.isoformat(),
-            "period_end": bill.period_end.isoformat(),
-        }
-
         # Numbers and dates from the bill's PDF only: never the PDF text, its
         # link, the customer's name or the address.
-        details = bill.details
-        if details.components:
-            attributes["components"] = dict(details.components)
-            attributes["line_items"] = [
-                {
-                    "component": item.component,
-                    "description": item.description,
-                    "usage": item.quantity,
-                    "rate": item.rate,
-                    "amount": item.amount,
-                }
-                for item in details.line_items
-            ]
-        if details.meter_reads:
-            # The dates the meters were actually billed for, unlike the period
-            # above, which is only estimated from the neighbouring bill's date.
-            attributes["billing_period_start"] = min(r.previous_read_date for r in details.meter_reads).date().isoformat()
-            attributes["billing_period_end"] = max(r.current_read_date for r in details.meter_reads).date().isoformat()
-            attributes["meter_reads"] = [
-                {
-                    "service": read.service,
-                    "meter_id": read.meter_id,
-                    "read_type": read.read_type,
-                    "previous_read_date": read.previous_read_date.date().isoformat(),
-                    "current_read_date": read.current_read_date.date().isoformat(),
-                    "billing_days": read.billing_days,
-                    "previous_read": read.previous_read,
-                    "current_read": read.current_read,
-                    "multiplier": read.multiplier,
-                    "usage": read.usage,
-                    "unit": read.unit,
-                }
-                for read in details.meter_reads
-            ]
+        attributes = bill_attributes(bill)
 
         options = self.coordinator.config_entry.options
         if options.get(CONF_EXPOSE_ACCOUNT_DETAILS, DEFAULT_EXPOSE_ACCOUNT_DETAILS):

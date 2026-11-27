@@ -5,9 +5,10 @@ from __future__ import annotations
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
+from .bill_history import async_remove_bill_history
 from .coordinator import WestervilleConfigEntry, WestervilleCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: WestervilleConfigEntry) -> bool:
@@ -34,3 +35,8 @@ async def _async_update_listener(hass: HomeAssistant, entry: WestervilleConfigEn
 async def async_unload_entry(hass: HomeAssistant, entry: WestervilleConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: WestervilleConfigEntry) -> None:
+    """Delete the saved bill history when the entry is removed."""
+    await async_remove_bill_history(hass, entry.entry_id)
