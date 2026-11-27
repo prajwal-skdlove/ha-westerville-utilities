@@ -19,7 +19,7 @@ TWO_LINKED_BILLS = """
 <thead><tr><th>View Bill</th><th>Date</th><th>Bill Amount</th><th>Due Date</th></tr></thead>
 <tbody>
 <td><a data-url="/app/viewBill?key=new">View</a></td><td>Jul 30, 2026</td><td>$28.60</td><td>Aug 15, 2026</td>
-<td><a data-url="/app/viewBill?key=old">View</a></td><td>Jun 26, 2026</td><td>$100.00</td><td>Jul 15, 2026</td>
+<td><a data-url="/app/viewBill?key=old">View</a></td><td>Jun 26, 2026</td><td>$28.60</td><td>Jul 15, 2026</td>
 </tbody>
 </table></body></html>
 """
@@ -50,7 +50,7 @@ async def test_picker_lists_bills_newest_first_and_steps_back(recorder_mock, has
 
     state = hass.states.get(BILL_SELECT)
     assert state.state == "Jun 26, 2026"
-    assert state.attributes["amount"] == 100.0
+    assert state.attributes["amount"] == 28.6
     assert state.attributes["bill_date"] == "2026-06-26"
     assert state.attributes["components"] == BILL_COMPONENTS
     assert "key=old" not in str(state.attributes)
@@ -84,5 +84,5 @@ async def test_bill_without_a_pdf_link_is_listed_without_detail(recorder_mock, h
 
     state = hass.states.get(BILL_SELECT)
     assert state.state == "Jun 26, 2026"
-    assert state.attributes["amount"] == 100.0
+    assert state.attributes["amount"] == 28.6
     assert "components" not in state.attributes
