@@ -55,6 +55,11 @@
       "latest_bill": {
         "name": "Latest bill"
       }
+    },
+    "select": {
+      "bill_month": {
+        "name": "Bill month"
+      }
     }
   }
 }
